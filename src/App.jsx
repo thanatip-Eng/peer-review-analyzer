@@ -1,7 +1,7 @@
 // src/App.jsx
 import React, { useState, useCallback, useMemo } from 'react';
-import { Upload, Users, BarChart2, Settings, Search, Download, ChevronRight, AlertCircle, CheckCircle2, XCircle, FileText, AlertTriangle, Eye, UserCheck, ClipboardList } from 'lucide-react';
-import { parseCSV, DEFAULT_CRITERIA, getFlaggedStudents, getFlaggedGraders, getKeywordsForVerification } from './utils/csvParser';
+import { Upload, Users, Search, Download, ChevronRight, AlertCircle, CheckCircle2, XCircle, AlertTriangle, UserCheck } from 'lucide-react';
+import { parseCSV, DEFAULT_CRITERIA, getFlaggedStudents, getFlaggedGraders } from './utils/csvParser';
 
 export default function App() {
   const [data, setData] = useState(null);
@@ -11,13 +11,6 @@ export default function App() {
   const [selectedGrader, setSelectedGrader] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
-  
-  // Keyword management
-  const [approvedKeywords, setApprovedKeywords] = useState([]); // คำที่ approve ว่ามีคุณภาพ
-  const [rejectedKeywords, setRejectedKeywords] = useState([]); // คำที่ reject ว่าไม่มีคุณภาพ
-  const [showCommentReview, setShowCommentReview] = useState(false);
-  const [scoreChanges, setScoreChanges] = useState(null); // เก็บการเปลี่ยนแปลงคะแนน
-  const [originalData, setOriginalData] = useState(null); // เก็บข้อมูลต้นฉบับ
 
   const handleFileUpload = useCallback(async (event) => {
     const file = event.target.files?.[0];
@@ -27,12 +20,7 @@ export default function App() {
     try {
       const result = await parseCSV(file);
       setData(result);
-      setOriginalData(result); // เก็บข้อมูลต้นฉบับ
       setActiveTab('overview');
-      // Reset keyword states
-      setApprovedKeywords([]);
-      setRejectedKeywords([]);
-      setScoreChanges(null);
     } catch (err) {
       console.error('Error:', err);
       setError(`เกิดข้อผิดพลาด: ${err.message}`);
@@ -66,11 +54,12 @@ export default function App() {
       'รหัสนักศึกษา': g.graderId,
       'ชื่อ-นามสกุล': g.fullName,
       'งานที่ได้รับ': g.assignedReviews,
-      'งานที่รีวิวแล้ว': g.completedReviews,
+      'งานที่รีวิวแล้ว': g.peerReviewScore.reviewedCount,
+      'งานสมบูรณ์': g.peerReviewScore.completeCount,
+      'คะแนนพื้นฐาน': g.peerReviewScore.baseScore,
+      'โบนัส': g.peerReviewScore.bonus,
+      'คะแนนรวม': g.peerReviewScore.netScore,
       'คะแนนเต็ม': g.peerReviewScore.fullScore,
-      'คะแนนที่ได้': g.peerReviewScore.earnedScore,
-      'คะแนนหัก': g.peerReviewScore.penalty,
-      'คะแนนสุทธิ': g.peerReviewScore.netScore,
       'Flags': g.flags.map(f => f.message).join('; ')
     }));
     downloadCSV(rows, 'grader-peer-review-scores');
@@ -100,10 +89,12 @@ export default function App() {
           work_reliable: '-',
           // คะแนน Peer Review
           pr_assigned: 0,
-          pr_completed: 0,
-          pr_earned: 0,
-          pr_penalty: 0,
+          pr_reviewed: 0,
+          pr_complete: 0,
+          pr_base: 0,
+          pr_bonus: 0,
           pr_netScore: 0,
+          pr_fullScore: 0,
           // Flags
           flags: []
         };
@@ -121,6 +112,7 @@ export default function App() {
     // เพิ่มข้อมูลจาก graders (คนรีวิว)
     Object.values(data.graders).forEach(g => {
       const key = g.graderId;
+      const pr = g.peerReviewScore;
       if (!combined[key]) {
         combined[key] = {
           studentId: g.graderId,
@@ -133,18 +125,22 @@ export default function App() {
           work_sd: '-',
           work_reliable: '-',
           pr_assigned: 0,
-          pr_completed: 0,
-          pr_earned: 0,
-          pr_penalty: 0,
+          pr_reviewed: 0,
+          pr_complete: 0,
+          pr_base: 0,
+          pr_bonus: 0,
           pr_netScore: 0,
+          pr_fullScore: 0,
           flags: []
         };
       }
       combined[key].pr_assigned = g.assignedReviews;
-      combined[key].pr_completed = g.completedReviews;
-      combined[key].pr_earned = g.peerReviewScore.earnedScore;
-      combined[key].pr_penalty = g.peerReviewScore.penalty;
-      combined[key].pr_netScore = g.peerReviewScore.netScore;
+      combined[key].pr_reviewed = pr.reviewedCount || 0;
+      combined[key].pr_complete = pr.completeCount || 0;
+      combined[key].pr_base = pr.baseScore || 0;
+      combined[key].pr_bonus = pr.bonus || 0;
+      combined[key].pr_netScore = pr.netScore || 0;
+      combined[key].pr_fullScore = pr.fullScore || 0;
       combined[key].flags.push(...g.flags.map(f => `[PR] ${f.message}`));
     });
     
@@ -165,185 +161,18 @@ export default function App() {
         '[ชิ้นงาน] เชื่อถือได้': c.work_reliable,
         // คะแนน Peer Review
         '[PR] งานที่ได้รับ': c.pr_assigned,
-        '[PR] รีวิวแล้ว': c.pr_completed,
-        '[PR] คะแนนได้': c.pr_earned,
-        '[PR] คะแนนหัก': c.pr_penalty,
-        '[PR] คะแนนสุทธิ': c.pr_netScore,
+        '[PR] รีวิวแล้ว': c.pr_reviewed,
+        '[PR] งานสมบูรณ์': c.pr_complete,
+        '[PR] คะแนนพื้นฐาน': c.pr_base,
+        '[PR] โบนัส': c.pr_bonus,
+        '[PR] คะแนนรวม': c.pr_netScore,
+        '[PR] คะแนนเต็ม': c.pr_fullScore,
         // Flags
         'หมายเหตุ': c.flags.join('; ')
       }));
     
     downloadCSV(rows, 'combined-scores');
   }, [data]);
-
-  // ฟังก์ชันคำนวณใหม่ตาม approved/rejected keywords
-  const recalculateWithKeywords = useCallback(() => {
-    if (!data || !originalData) {
-      console.log('No data or originalData');
-      return;
-    }
-    
-    console.log('=== Recalculating with keywords ===');
-    console.log('Approved keywords:', approvedKeywords);
-    console.log('Rejected keywords:', rejectedKeywords);
-    
-    // เก็บคะแนนเดิมก่อนคำนวณใหม่
-    const oldScores = {};
-    Object.values(data.graders).forEach(g => {
-      oldScores[g.graderName] = {
-        netScore: g.peerReviewScore.netScore,
-        penalty: g.peerReviewScore.penalty
-      };
-    });
-    
-    // คำนวณใหม่
-    const newGraders = {};
-    
-    Object.values(originalData.graders).forEach(grader => {
-      const newGrader = JSON.parse(JSON.stringify(grader)); // deep clone
-      newGrader.peerReviewScore = {
-        fullScore: grader.assignedReviews,
-        earnedScore: 0,
-        penalty: 0,
-        netScore: 0,
-        details: []
-      };
-      newGrader.flags = [];
-      
-      // วิเคราะห์แต่ละ review ใหม่
-      grader.reviewsMade.forEach(reviewId => {
-        const review = originalData.reviews.find(r => r.id === reviewId);
-        if (!review || !review.isCompleted) return;
-        
-        // ตรวจสอบคุณภาพ comment ใหม่ตาม approved/rejected keywords
-        let qualityCount = 0;
-        const totalCriteria = DEFAULT_CRITERIA.length;
-        
-        DEFAULT_CRITERIA.forEach(criteria => {
-          const comment = review.comments[criteria.key];
-          const isQuality = checkQualityWithKeywords(comment, approvedKeywords, rejectedKeywords);
-          if (isQuality) qualityCount++;
-        });
-        
-        const hasAllQuality = qualityCount === totalCriteria;
-        const earned = 1;
-        const penalty = hasAllQuality ? 0 : 0.2;
-        
-        newGrader.peerReviewScore.earnedScore += earned;
-        newGrader.peerReviewScore.penalty = Math.round((newGrader.peerReviewScore.penalty + penalty) * 10) / 10;
-        newGrader.peerReviewScore.details.push({
-          reviewId: review.id,
-          studentReviewed: review.studentName,
-          studentId: review.studentId,
-          gradeGiven: review.gradeGiven,
-          hasAllQualityComments: hasAllQuality,
-          qualityCommentCount: qualityCount,
-          totalCriteria: totalCriteria,
-          scoreEarned: earned,
-          penalty: penalty,
-          keywords: review.allKeywords || []
-        });
-      });
-      
-      newGrader.peerReviewScore.netScore = Math.max(0, Math.round((newGrader.peerReviewScore.earnedScore - newGrader.peerReviewScore.penalty) * 10) / 10);
-      
-      // Update flags
-      if (newGrader.completedReviews === 0 && newGrader.assignedReviews > 0) {
-        newGrader.flags.push({ type: 'no_review_done', message: `ได้รับ ${newGrader.assignedReviews} งานแต่ยังไม่รีวิวเลย`, severity: 'alert' });
-      }
-      if (newGrader.peerReviewScore.penalty > 0) {
-        newGrader.flags.push({ type: 'comment_penalty', message: `ถูกหัก ${newGrader.peerReviewScore.penalty} (comment ไม่ครบ/ไม่มีคุณภาพ)`, severity: 'warning' });
-      }
-      
-      newGraders[grader.graderName] = newGrader;
-    });
-    
-    // หาคนที่คะแนนเปลี่ยน
-    const changes = [];
-    Object.keys(newGraders).forEach(name => {
-      const oldScore = oldScores[name];
-      const newScore = newGraders[name].peerReviewScore;
-      
-      if (oldScore) {
-        const oldNet = Math.round(oldScore.netScore * 10) / 10;
-        const newNet = Math.round(newScore.netScore * 10) / 10;
-        const oldPen = Math.round(oldScore.penalty * 10) / 10;
-        const newPen = Math.round(newScore.penalty * 10) / 10;
-        
-        if (oldNet !== newNet || oldPen !== newPen) {
-          changes.push({
-            graderName: name,
-            graderId: newGraders[name].graderId,
-            fullName: newGraders[name].fullName,
-            oldPenalty: oldPen,
-            newPenalty: newPen,
-            oldNetScore: oldNet,
-            newNetScore: newNet,
-            diff: Math.round((newNet - oldNet) * 10) / 10
-          });
-        }
-      }
-    });
-    
-    console.log('Score changes found:', changes.length);
-    console.log('Changes:', changes);
-    
-    // Update data
-    setData(prev => ({
-      ...prev,
-      graders: newGraders,
-      stats: {
-        ...prev.stats,
-        reviewsWithPenalty: Object.values(newGraders).reduce((sum, g) => 
-          sum + g.peerReviewScore.details.filter(d => d.penalty > 0).length, 0)
-      }
-    }));
-    
-    setScoreChanges(changes);
-    
-    // แจ้งเตือน
-    alert(`อัพเดทคะแนนสำเร็จ!\n\nมี ${changes.length} คนที่คะแนนเปลี่ยนแปลง`);
-    
-  }, [data, originalData, approvedKeywords, rejectedKeywords]);
-
-  // ฟังก์ชันตรวจสอบคุณภาพ comment พร้อม approved/rejected keywords
-  const checkQualityWithKeywords = (comment, approved, rejected) => {
-    if (!comment || typeof comment !== 'string') return false;
-    const trimmed = comment.trim();
-    if (trimmed === '') return false;
-    
-    const lowerComment = trimmed.toLowerCase();
-    
-    // ถ้า comment ตรงกับ approved list = มีคุณภาพ
-    for (const kw of approved) {
-      if (lowerComment === kw.toLowerCase() || lowerComment.includes(kw.toLowerCase())) {
-        return true;
-      }
-    }
-    
-    // ถ้า comment ตรงกับ rejected list = ไม่มีคุณภาพ  
-    for (const kw of rejected) {
-      if (lowerComment === kw.toLowerCase()) {
-        return false;
-      }
-    }
-    
-    // ตรวจสอบความยาวขั้นต่ำ
-    if (trimmed.length < 5) return false;
-    
-    // ตรวจสอบตาม pattern เดิม
-    const lowQualityPatterns = [
-      /^-+$/, /^ไม่มี$/i, /^ไม่$/i, /^ดี$/i, /^ได้$/i, /^ok$/i,
-      /^ครับ$/i, /^ค่ะ$/i, /^ผ่าน$/i, /^\.+$/, /^n\/a$/i, /^none$/i,
-      /^good$/i, /^yes$/i, /^no$/i, /^ใช่$/i, /^โอเค$/i
-    ];
-    
-    for (const pattern of lowQualityPatterns) {
-      if (pattern.test(trimmed)) return false;
-    }
-    
-    return true;
-  };
 
   const downloadCSV = (rows, filename) => {
     if (rows.length === 0) return;
@@ -376,63 +205,6 @@ export default function App() {
 
   const flaggedStudents = useMemo(() => data ? getFlaggedStudents(data.students) : [], [data]);
   const flaggedGraders = useMemo(() => data ? getFlaggedGraders(data.graders) : [], [data]);
-  const keywords = useMemo(() => data ? getKeywordsForVerification(data.graders) : [], [data]);
-
-  // รวบรวม comments ที่ไม่มีคุณภาพทั้งหมด
-  const lowQualityComments = useMemo(() => {
-    if (!data) return [];
-    const comments = [];
-    
-    Object.values(data.graders).forEach(grader => {
-      grader.peerReviewScore.details.forEach(detail => {
-        if (!detail.hasAllQualityComments) {
-          const review = data.reviews.find(r => r.id === detail.reviewId);
-          if (review) {
-            DEFAULT_CRITERIA.forEach(criteria => {
-              const analysis = review.commentAnalysis[criteria.key];
-              if (analysis && !analysis.isQuality && analysis.hasComment) {
-                comments.push({
-                  graderName: grader.graderName,
-                  graderId: grader.graderId,
-                  graderFullName: grader.fullName,
-                  reviewId: review.id,
-                  studentReviewed: review.studentName,
-                  criteriaKey: criteria.key,
-                  criteriaName: criteria.name,
-                  comment: analysis.originalComment,
-                  reason: analysis.reason
-                });
-              }
-            });
-          }
-        }
-      });
-    });
-    
-    // Group by comment text for easier review
-    const grouped = {};
-    comments.forEach(c => {
-      const key = c.comment.toLowerCase().trim();
-      if (!grouped[key]) {
-        grouped[key] = {
-          comment: c.comment,
-          reason: c.reason,
-          count: 0,
-          graders: []
-        };
-      }
-      grouped[key].count++;
-      if (!grouped[key].graders.find(g => g.graderId === c.graderId)) {
-        grouped[key].graders.push({
-          graderId: c.graderId,
-          graderFullName: c.graderFullName,
-          criteriaName: c.criteriaName
-        });
-      }
-    });
-    
-    return Object.values(grouped).sort((a, b) => b.count - a.count);
-  }, [data]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
@@ -532,14 +304,6 @@ export default function App() {
               <AdminTab 
                 flaggedStudents={flaggedStudents}
                 flaggedGraders={flaggedGraders}
-                lowQualityComments={lowQualityComments}
-                approvedKeywords={approvedKeywords}
-                setApprovedKeywords={setApprovedKeywords}
-                rejectedKeywords={rejectedKeywords}
-                setRejectedKeywords={setRejectedKeywords}
-                onRecalculate={recalculateWithKeywords}
-                scoreChanges={scoreChanges}
-                setScoreChanges={setScoreChanges}
                 data={data}
               />
             )}
@@ -766,6 +530,14 @@ function GradersTab({ graders, searchQuery, setSearchQuery, onSelect, onExport }
         </button>
       </div>
 
+      {/* Legend */}
+      <div className="bg-slate-800/50 rounded-xl p-3 text-sm flex flex-wrap gap-4">
+        <span className="text-slate-400">เงื่อนไข:</span>
+        <span>รีวิว 1 งาน = <span className="text-cyan-400">1 คะแนน</span></span>
+        <span>รีวิวครบ + ทุกงานสมบูรณ์ = <span className="text-green-400">+1 โบนัส</span></span>
+        <span>สมบูรณ์ = ขาด comment ไม่เกิน 3 ช่อง</span>
+      </div>
+
       <div className="bg-slate-900/50 border border-white/10 rounded-2xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full">
@@ -775,42 +547,59 @@ function GradersTab({ graders, searchQuery, setSearchQuery, onSelect, onExport }
                 <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">ชื่อ-นามสกุล</th>
                 <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">งานที่ได้รับ</th>
                 <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">รีวิวแล้ว</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนนได้</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">หัก</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">สุทธิ</th>
+                <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">งานสมบูรณ์</th>
+                <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนน</th>
+                <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">โบนัส</th>
+                <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">รวม</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {graders.slice(0, 100).map(grader => (
-                <tr key={grader.graderName} className="hover:bg-white/5">
-                  <td className="px-4 py-3 font-mono text-sm">{grader.graderId}</td>
-                  <td className="px-4 py-3">
-                    {grader.fullName}
-                    {grader.flags.length > 0 && <AlertTriangle className="inline w-4 h-4 text-yellow-400 ml-2" />}
-                  </td>
-                  <td className="px-4 py-3 text-center text-slate-400">{grader.assignedReviews}</td>
-                  <td className="px-4 py-3 text-center">
-                    <span className={grader.completedReviews === grader.assignedReviews ? 'text-green-400' : 'text-yellow-400'}>
-                      {grader.completedReviews}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3 text-center text-cyan-400">{grader.peerReviewScore.earnedScore}</td>
-                  <td className="px-4 py-3 text-center text-red-400">
-                    {grader.peerReviewScore.penalty > 0 ? `-${grader.peerReviewScore.penalty}` : '-'}
-                  </td>
-                  <td className="px-4 py-3 text-center">
-                    <span className={`font-semibold ${getScoreColor(grader.peerReviewScore.netScore, grader.assignedReviews)}`}>
-                      {grader.peerReviewScore.netScore}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <button onClick={() => onSelect(grader)} className="p-2 hover:bg-white/10 rounded-lg">
-                      <ChevronRight className="w-5 h-5" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {graders.slice(0, 100).map(grader => {
+                const pr = grader.peerReviewScore;
+                return (
+                  <tr key={grader.graderName} className="hover:bg-white/5">
+                    <td className="px-4 py-3 font-mono text-sm">{grader.graderId}</td>
+                    <td className="px-4 py-3">
+                      {grader.fullName}
+                      {grader.flags.length > 0 && <AlertTriangle className="inline w-4 h-4 text-yellow-400 ml-2" />}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={grader.assignedReviews !== 3 ? 'text-yellow-400' : 'text-slate-400'}>
+                        {grader.assignedReviews}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={pr.reviewedCount === grader.assignedReviews ? 'text-green-400' : 'text-yellow-400'}>
+                        {pr.reviewedCount}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={pr.completeCount === pr.reviewedCount ? 'text-green-400' : 'text-yellow-400'}>
+                        {pr.completeCount}/{pr.reviewedCount}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center text-cyan-400">{pr.baseScore}</td>
+                    <td className="px-4 py-3 text-center">
+                      {pr.bonus > 0 ? (
+                        <span className="text-green-400">+{pr.bonus}</span>
+                      ) : (
+                        <span className="text-slate-500">-</span>
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={`font-semibold ${pr.netScore === pr.fullScore ? 'text-green-400' : pr.netScore > 0 ? 'text-cyan-400' : 'text-red-400'}`}>
+                        {pr.netScore}/{pr.fullScore}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <button onClick={() => onSelect(grader)} className="p-2 hover:bg-white/10 rounded-lg">
+                        <ChevronRight className="w-5 h-5" />
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -819,218 +608,148 @@ function GradersTab({ graders, searchQuery, setSearchQuery, onSelect, onExport }
   );
 }
 
-function AdminTab({ flaggedStudents, flaggedGraders, lowQualityComments, approvedKeywords, setApprovedKeywords, rejectedKeywords, setRejectedKeywords, onRecalculate, scoreChanges, setScoreChanges }) {
-  const [activeSection, setActiveSection] = useState('comments'); // comments, flagged, changes
-  const [currentIndex, setCurrentIndex] = useState(0);
+function AdminTab({ flaggedStudents, flaggedGraders, data }) {
+  const [activeSection, setActiveSection] = useState('unusual'); // unusual, flagged, inconsistent
 
-  // ฟังก์ชัน approve comment (ถือว่ามีคุณภาพ)
-  const approveComment = (comment) => {
-    const trimmed = comment.trim().toLowerCase();
-    if (!approvedKeywords.includes(trimmed)) {
-      setApprovedKeywords(prev => [...prev, trimmed]);
-    }
-    // ลบออกจาก rejected ถ้ามี
-    setRejectedKeywords(prev => prev.filter(k => k !== trimmed));
-    // ไปยัง comment ถัดไป
-    if (currentIndex < lowQualityComments.length - 1) {
-      setCurrentIndex(prev => prev + 1);
-    }
-  };
+  // กรณีพิเศษ: ได้รับงานไม่เท่ากับ 3
+  const unusualAssignments = useMemo(() => {
+    if (!data) return [];
+    return Object.values(data.graders)
+      .filter(g => g.assignedReviews !== 3 && g.assignedReviews > 0)
+      .sort((a, b) => a.assignedReviews - b.assignedReviews);
+  }, [data]);
 
-  // ฟังก์ชัน reject comment (ยืนยันว่าไม่มีคุณภาพ)
-  const rejectComment = (comment) => {
-    const trimmed = comment.trim().toLowerCase();
-    if (!rejectedKeywords.includes(trimmed)) {
-      setRejectedKeywords(prev => [...prev, trimmed]);
-    }
-    // ลบออกจาก approved ถ้ามี
-    setApprovedKeywords(prev => prev.filter(k => k !== trimmed));
-    // ไปยัง comment ถัดไป
-    if (currentIndex < lowQualityComments.length - 1) {
-      setCurrentIndex(prev => prev + 1);
-    }
-  };
-
-  // Skip comment
-  const skipComment = () => {
-    if (currentIndex < lowQualityComments.length - 1) {
-      setCurrentIndex(prev => prev + 1);
-    }
-  };
-
-  // ไปยัง comment ก่อนหน้า
-  const prevComment = () => {
-    if (currentIndex > 0) {
-      setCurrentIndex(prev => prev - 1);
-    }
-  };
-
-  const currentComment = lowQualityComments[currentIndex];
-  const reviewedCount = approvedKeywords.length + rejectedKeywords.length;
+  // กรณี G: คะแนนไม่สอดคล้องกับคอมเมนต์
+  const inconsistentReviews = useMemo(() => {
+    if (!data) return [];
+    const results = [];
+    
+    Object.values(data.graders).forEach(grader => {
+      grader.peerReviewScore.details.forEach(detail => {
+        const review = data.reviews.find(r => r.id === detail.reviewId);
+        if (!review) return;
+        
+        // ตรวจสอบความไม่สอดคล้อง
+        const grade = detail.gradeGiven;
+        const comments = detail.comments || {};
+        const allComments = Object.values(comments).join(' ').toLowerCase();
+        
+        let issue = null;
+        
+        // ให้คะแนนเต็ม (11-12) แต่คอมเมนต์บอกว่ามีปัญหา
+        if (grade >= 11) {
+          const negativeWords = ['ไม่', 'ขาด', 'บกพร่อง', 'ปรับปรุง', 'แก้ไข', 'ไม่มี', 'ไม่ได้', 'ไม่ครบ', 'ไม่ชัด'];
+          const hasNegative = negativeWords.some(w => allComments.includes(w));
+          if (hasNegative && allComments.length > 20) {
+            issue = 'ให้คะแนนสูง (≥11) แต่คอมเมนต์มีคำเชิงลบ';
+          }
+        }
+        
+        // ให้คะแนนต่ำ (≤6) แต่คอมเมนต์บอกว่าดี
+        if (grade <= 6) {
+          const positiveWords = ['ดีมาก', 'ครบถ้วน', 'สมบูรณ์', 'ยอดเยี่ยม', 'เยี่ยม', 'ชัดเจน', 'ดี'];
+          const hasPositive = positiveWords.some(w => allComments.includes(w));
+          if (hasPositive && !allComments.includes('ไม่')) {
+            issue = 'ให้คะแนนต่ำ (≤6) แต่คอมเมนต์เป็นเชิงบวก';
+          }
+        }
+        
+        if (issue) {
+          results.push({
+            graderName: grader.graderName,
+            graderId: grader.graderId,
+            graderFullName: grader.fullName,
+            studentReviewed: detail.studentReviewed,
+            grade: grade,
+            comments: comments,
+            issue: issue
+          });
+        }
+      });
+    });
+    
+    return results;
+  }, [data]);
 
   return (
     <div className="space-y-6">
       {/* Section Tabs */}
       <div className="flex gap-2 bg-slate-800/50 p-1 rounded-xl">
         <button
-          onClick={() => setActiveSection('comments')}
-          className={`flex-1 px-4 py-2 rounded-lg transition ${activeSection === 'comments' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-white'}`}
+          onClick={() => setActiveSection('unusual')}
+          className={`flex-1 px-4 py-2 rounded-lg transition ${activeSection === 'unusual' ? 'bg-yellow-600 text-white' : 'text-slate-400 hover:text-white'}`}
         >
-          🔍 ตรวจสอบ Comment ({lowQualityComments.length})
+          ⚠️ งานไม่เท่ากับ 3 ({unusualAssignments.length})
         </button>
         <button
           onClick={() => setActiveSection('flagged')}
-          className={`flex-1 px-4 py-2 rounded-lg transition ${activeSection === 'flagged' ? 'bg-yellow-600 text-white' : 'text-slate-400 hover:text-white'}`}
+          className={`flex-1 px-4 py-2 rounded-lg transition ${activeSection === 'flagged' ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-white'}`}
         >
-          ⚠️ รายการผิดปกติ ({flaggedStudents.length + flaggedGraders.length})
+          🚨 รายการผิดปกติ ({flaggedStudents.length + flaggedGraders.length})
         </button>
         <button
-          onClick={() => setActiveSection('changes')}
-          className={`flex-1 px-4 py-2 rounded-lg transition ${activeSection === 'changes' ? 'bg-green-600 text-white' : 'text-slate-400 hover:text-white'}`}
+          onClick={() => setActiveSection('inconsistent')}
+          className={`flex-1 px-4 py-2 rounded-lg transition ${activeSection === 'inconsistent' ? 'bg-purple-600 text-white' : 'text-slate-400 hover:text-white'}`}
         >
-          📊 ผลการปรับคะแนน {scoreChanges && `(${scoreChanges.length})`}
+          🔍 คะแนน-คอมเมนต์ไม่สอดคล้อง ({inconsistentReviews.length})
         </button>
       </div>
 
-      {/* Comment Review Section */}
-      {activeSection === 'comments' && (
-        <div className="space-y-4">
-          {/* Progress & Stats */}
-          <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-4">
-            <div className="flex justify-between items-center mb-3">
-              <h3 className="text-lg font-semibold">ตรวจสอบ Comment ที่ถูกตั้งค่าว่าไม่มีคุณภาพ</h3>
-              <span className="text-slate-400">{currentIndex + 1} / {lowQualityComments.length}</span>
-            </div>
-            <div className="w-full bg-slate-700 rounded-full h-2 mb-3">
-              <div 
-                className="bg-gradient-to-r from-purple-500 to-cyan-500 h-2 rounded-full transition-all"
-                style={{ width: `${(currentIndex / Math.max(1, lowQualityComments.length)) * 100}%` }}
-              />
-            </div>
-            <div className="flex gap-4 text-sm">
-              <span className="text-green-400">✓ Approved: {approvedKeywords.length}</span>
-              <span className="text-red-400">✗ Rejected: {rejectedKeywords.length}</span>
-              <span className="text-slate-400">Reviewed: {reviewedCount}</span>
-            </div>
-          </div>
-
-          {/* Current Comment Card */}
-          {currentComment ? (
-            <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6">
-              <div className="mb-4">
-                <div className="text-sm text-slate-400 mb-1">Comment ที่ต้องตรวจสอบ:</div>
-                <div className="text-2xl font-medium bg-slate-800 rounded-xl p-4 text-center">
-                  "{currentComment.comment}"
-                </div>
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
-                <div className="bg-slate-800/50 rounded-lg p-3">
-                  <div className="text-slate-400">เหตุผลที่ถูกตั้งค่าว่าไม่มีคุณภาพ:</div>
-                  <div className="text-yellow-400">{currentComment.reason}</div>
-                </div>
-                <div className="bg-slate-800/50 rounded-lg p-3">
-                  <div className="text-slate-400">จำนวนครั้งที่ใช้:</div>
-                  <div className="text-cyan-400">{currentComment.count} ครั้ง ({currentComment.graders.length} คน)</div>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex gap-3 justify-center">
-                <button
-                  onClick={prevComment}
-                  disabled={currentIndex === 0}
-                  className="px-4 py-3 bg-slate-700 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed rounded-xl transition"
-                >
-                  ← ก่อนหน้า
-                </button>
-                <button
-                  onClick={() => rejectComment(currentComment.comment)}
-                  className="px-6 py-3 bg-red-600 hover:bg-red-500 rounded-xl font-medium transition flex items-center gap-2"
-                >
-                  <XCircle className="w-5 h-5" /> ไม่มีคุณภาพ
-                </button>
-                <button
-                  onClick={skipComment}
-                  className="px-4 py-3 bg-slate-700 hover:bg-slate-600 rounded-xl transition"
-                >
-                  ข้าม
-                </button>
-                <button
-                  onClick={() => approveComment(currentComment.comment)}
-                  className="px-6 py-3 bg-green-600 hover:bg-green-500 rounded-xl font-medium transition flex items-center gap-2"
-                >
-                  <CheckCircle2 className="w-5 h-5" /> มีคุณภาพ
-                </button>
-              </div>
-
-              {/* Sample graders */}
-              <div className="mt-4 text-sm text-slate-400">
-                <div className="mb-1">ตัวอย่างคนที่ใช้ comment นี้:</div>
-                <div className="flex flex-wrap gap-2">
-                  {currentComment.graders.slice(0, 5).map((g, i) => (
-                    <span key={i} className="bg-slate-800 px-2 py-1 rounded text-xs">
-                      {g.graderId} - {g.criteriaName}
-                    </span>
-                  ))}
-                  {currentComment.graders.length > 5 && (
-                    <span className="text-slate-500">+{currentComment.graders.length - 5} อีก</span>
-                  )}
-                </div>
-              </div>
+      {/* Unusual Assignments Section */}
+      {activeSection === 'unusual' && (
+        <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+            ⚠️ นักศึกษาที่ได้รับงานไม่เท่ากับ 3 ({unusualAssignments.length} คน)
+          </h3>
+          <p className="text-slate-400 text-sm mb-4">
+            รายชื่อนักศึกษาที่ได้รับมอบหมายงาน peer review ไม่ใช่ 3 งาน (อาจเป็นเพราะระบบจัดสรร หรือ TA เพิ่มเติม)
+          </p>
+          
+          {unusualAssignments.length === 0 ? (
+            <div className="text-center py-8 text-green-400">
+              <CheckCircle2 className="w-12 h-12 mx-auto mb-2" />
+              ทุกคนได้รับงาน 3 งานตามปกติ
             </div>
           ) : (
-            <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-8 text-center">
-              <CheckCircle2 className="w-16 h-16 text-green-400 mx-auto mb-4" />
-              <h3 className="text-xl font-semibold mb-2">ตรวจสอบครบแล้ว!</h3>
-              <p className="text-slate-400">ไม่มี comment ที่ต้องตรวจสอบเพิ่มเติม</p>
-            </div>
-          )}
-
-          {/* Reviewed Keywords Summary */}
-          {(approvedKeywords.length > 0 || rejectedKeywords.length > 0) && (
-            <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-4">
-              <h4 className="font-semibold mb-3">คำที่ตรวจสอบแล้ว:</h4>
-              <div className="grid md:grid-cols-2 gap-4">
-                {approvedKeywords.length > 0 && (
-                  <div>
-                    <div className="text-sm text-green-400 mb-2">✓ มีคุณภาพ ({approvedKeywords.length}):</div>
-                    <div className="flex flex-wrap gap-1">
-                      {approvedKeywords.map((kw, i) => (
-                        <span key={i} className="bg-green-900/30 text-green-300 px-2 py-1 rounded text-xs">
-                          {kw}
-                          <button onClick={() => setApprovedKeywords(prev => prev.filter(k => k !== kw))} className="ml-1 text-green-500 hover:text-white">×</button>
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead className="bg-slate-800/50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">รหัส</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">ชื่อ-นามสกุล</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">งานที่ได้รับ</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">รีวิวแล้ว</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนน</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">หมายเหตุ</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {unusualAssignments.map(g => (
+                    <tr key={g.graderName} className="hover:bg-white/5">
+                      <td className="px-4 py-3 font-mono text-sm">{g.graderId}</td>
+                      <td className="px-4 py-3">{g.fullName}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`font-bold ${g.assignedReviews < 3 ? 'text-red-400' : 'text-yellow-400'}`}>
+                          {g.assignedReviews}
                         </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                {rejectedKeywords.length > 0 && (
-                  <div>
-                    <div className="text-sm text-red-400 mb-2">✗ ไม่มีคุณภาพ ({rejectedKeywords.length}):</div>
-                    <div className="flex flex-wrap gap-1">
-                      {rejectedKeywords.map((kw, i) => (
-                        <span key={i} className="bg-red-900/30 text-red-300 px-2 py-1 rounded text-xs">
-                          {kw}
-                          <button onClick={() => setRejectedKeywords(prev => prev.filter(k => k !== kw))} className="ml-1 text-red-500 hover:text-white">×</button>
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Recalculate Button */}
-          {reviewedCount > 0 && (
-            <div className="flex justify-center">
-              <button
-                onClick={onRecalculate}
-                className="px-8 py-4 bg-gradient-to-r from-purple-600 to-cyan-600 hover:from-purple-500 hover:to-cyan-500 rounded-xl font-medium text-lg transition shadow-lg flex items-center gap-2"
-              >
-                🔄 อัพเดทคะแนนตาม Keyword ที่ตรวจสอบแล้ว
-              </button>
+                      </td>
+                      <td className="px-4 py-3 text-center text-cyan-400">
+                        {g.peerReviewScore.reviewedCount}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {g.peerReviewScore.netScore}/{g.peerReviewScore.fullScore}
+                      </td>
+                      <td className="px-4 py-3 text-center text-sm">
+                        {g.assignedReviews < 3 ? (
+                          <span className="text-red-400">น้อยกว่าปกติ</span>
+                        ) : (
+                          <span className="text-yellow-400">มากกว่าปกติ (อาจมี TA เพิ่ม)</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           )}
         </div>
@@ -1101,92 +820,62 @@ function AdminTab({ flaggedStudents, flaggedGraders, lowQualityComments, approve
         </div>
       )}
 
-      {/* Score Changes Section */}
-      {activeSection === 'changes' && (
+      {/* Inconsistent Reviews Section (กรณี G) */}
+      {activeSection === 'inconsistent' && (
         <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6">
           <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-            📊 ผลการปรับคะแนน Peer Review
+            🔍 คะแนนไม่สอดคล้องกับคอมเมนต์ ({inconsistentReviews.length} รายการ)
           </h3>
+          <p className="text-slate-400 text-sm mb-4">
+            รายการรีวิวที่คะแนนและคอมเมนต์อาจไม่สอดคล้องกัน ควรตรวจสอบเพิ่มเติม
+          </p>
           
-          {!scoreChanges ? (
-            <div className="text-center py-8">
-              <div className="text-slate-400 mb-4">ยังไม่มีการปรับคะแนน</div>
-              <p className="text-sm text-slate-500">ไปที่ "ตรวจสอบ Comment" เพื่อ approve/reject keywords แล้วกดอัพเดทคะแนน</p>
-            </div>
-          ) : scoreChanges.length === 0 ? (
-            <div className="text-center py-8">
-              <CheckCircle2 className="w-16 h-16 text-green-400 mx-auto mb-4" />
-              <div className="text-green-400 text-lg">ไม่มีคะแนนที่เปลี่ยนแปลง</div>
-              <p className="text-sm text-slate-400 mt-2">Keyword ที่ตรวจสอบไม่ส่งผลต่อคะแนนของใครเลย</p>
+          {inconsistentReviews.length === 0 ? (
+            <div className="text-center py-8 text-green-400">
+              <CheckCircle2 className="w-12 h-12 mx-auto mb-2" />
+              ไม่พบความไม่สอดคล้องที่ชัดเจน
             </div>
           ) : (
-            <>
-              <div className="mb-4 p-3 bg-green-900/20 border border-green-500/30 rounded-lg">
-                <span className="text-green-400 font-semibold">มี {scoreChanges.length} คนที่คะแนนเปลี่ยนแปลง</span>
-              </div>
-              
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead className="bg-slate-800/50">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">รหัส</th>
-                      <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">ชื่อ-นามสกุล</th>
-                      <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">หักเดิม</th>
-                      <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">หักใหม่</th>
-                      <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนนเดิม</th>
-                      <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนนใหม่</th>
-                      <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">เปลี่ยนแปลง</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {scoreChanges.map((change, i) => (
-                      <tr key={i} className="hover:bg-white/5">
-                        <td className="px-4 py-3 font-mono text-sm">{change.graderId}</td>
-                        <td className="px-4 py-3">{change.fullName}</td>
-                        <td className="px-4 py-3 text-center text-red-400">-{change.oldPenalty}</td>
-                        <td className="px-4 py-3 text-center text-red-400">-{change.newPenalty}</td>
-                        <td className="px-4 py-3 text-center text-slate-400">{change.oldNetScore}</td>
-                        <td className="px-4 py-3 text-center text-cyan-400">{change.newNetScore}</td>
-                        <td className="px-4 py-3 text-center">
-                          <span className={`font-semibold ${change.diff > 0 ? 'text-green-400' : change.diff < 0 ? 'text-red-400' : 'text-slate-400'}`}>
-                            {change.diff > 0 ? '+' : ''}{change.diff}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="mt-4 flex justify-end">
-                <button
-                  onClick={() => {
-                    const rows = scoreChanges.map((c, i) => ({
-                      'ลำดับ': i + 1,
-                      'รหัส': c.graderId,
-                      'ชื่อ-นามสกุล': c.fullName,
-                      'หักเดิม': c.oldPenalty,
-                      'หักใหม่': c.newPenalty,
-                      'คะแนนเดิม': c.oldNetScore,
-                      'คะแนนใหม่': c.newNetScore,
-                      'เปลี่ยนแปลง': c.diff
-                    }));
-                    const headers = Object.keys(rows[0]).join(',');
-                    const csvRows = rows.map(row => Object.values(row).map(v => `"${v}"`).join(','));
-                    const csvContent = [headers, ...csvRows].join('\n');
-                    const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-                    const url = URL.createObjectURL(blob);
-                    const link = document.createElement('a');
-                    link.href = url;
-                    link.download = `score-changes-${new Date().toISOString().split('T')[0]}.csv`;
-                    link.click();
-                  }}
-                  className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg"
-                >
-                  <Download className="w-4 h-4" /> Export การเปลี่ยนแปลง
-                </button>
-              </div>
-            </>
+            <div className="space-y-4 max-h-[600px] overflow-y-auto">
+              {inconsistentReviews.map((item, idx) => (
+                <div key={idx} className="bg-slate-800/50 rounded-lg p-4">
+                  <div className="flex justify-between items-start mb-3">
+                    <div>
+                      <div className="text-sm text-slate-400">Grader:</div>
+                      <div className="font-medium">{item.graderFullName}</div>
+                      <div className="text-sm text-slate-500 font-mono">{item.graderId}</div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-sm text-slate-400">รีวิวงานของ:</div>
+                      <div className="text-sm">{item.studentReviewed}</div>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-center gap-4 mb-3">
+                    <div className="bg-slate-700 px-3 py-1 rounded">
+                      <span className="text-slate-400 text-sm">คะแนน: </span>
+                      <span className={`font-bold ${item.grade >= 11 ? 'text-green-400' : item.grade <= 6 ? 'text-red-400' : 'text-yellow-400'}`}>
+                        {item.grade}/12
+                      </span>
+                    </div>
+                    <div className="text-yellow-400 text-sm">
+                      ⚠️ {item.issue}
+                    </div>
+                  </div>
+                  
+                  <div className="text-sm">
+                    <div className="text-slate-400 mb-1">ตัวอย่าง Comments:</div>
+                    <div className="bg-slate-900 rounded p-2 text-slate-300 text-xs max-h-20 overflow-y-auto">
+                      {Object.entries(item.comments || {}).slice(0, 3).map(([key, val]) => (
+                        val && val.trim() && val.trim() !== '-' ? (
+                          <div key={key} className="mb-1">• {val}</div>
+                        ) : null
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       )}
@@ -1273,6 +962,8 @@ function StudentModal({ student, reviews, onClose }) {
 }
 
 function GraderModal({ grader, reviews, onClose }) {
+  const pr = grader.peerReviewScore;
+  
   return (
     <div className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onClick={onClose}>
       <div className="bg-slate-900 border border-white/10 rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden" onClick={e => e.stopPropagation()}>
@@ -1286,24 +977,37 @@ function GraderModal({ grader, reviews, onClose }) {
           </div>
           <div className="flex gap-6 mt-4">
             <div>
-              <div className="text-3xl font-bold text-cyan-400">{grader.peerReviewScore.netScore}</div>
+              <div className="text-3xl font-bold text-cyan-400">{pr.netScore}/{pr.fullScore}</div>
               <div className="text-sm text-slate-400">คะแนน Peer Review</div>
             </div>
             <div>
-              <div className="text-3xl font-bold text-purple-400">{grader.completedReviews}/{grader.assignedReviews}</div>
+              <div className="text-3xl font-bold text-purple-400">{pr.reviewedCount}/{grader.assignedReviews}</div>
               <div className="text-sm text-slate-400">งานที่รีวิว</div>
             </div>
             <div>
-              <div className="text-3xl font-bold text-red-400">-{grader.peerReviewScore.penalty}</div>
-              <div className="text-sm text-slate-400">คะแนนที่ถูกหัก</div>
+              <div className="text-3xl font-bold text-green-400">{pr.completeCount}/{pr.reviewedCount}</div>
+              <div className="text-sm text-slate-400">งานสมบูรณ์</div>
+            </div>
+            <div>
+              <div className={`text-3xl font-bold ${pr.bonus > 0 ? 'text-green-400' : 'text-slate-500'}`}>
+                {pr.bonus > 0 ? `+${pr.bonus}` : '0'}
+              </div>
+              <div className="text-sm text-slate-400">โบนัส</div>
             </div>
           </div>
         </div>
 
         <div className="p-6 overflow-y-auto max-h-[calc(90vh-200px)]">
+          <div className="mb-4 p-3 bg-slate-800/50 rounded-lg text-sm">
+            <div className="text-slate-400">เงื่อนไขคะแนน:</div>
+            <div>• รีวิว 1 งาน = 1 คะแนน</div>
+            <div>• รีวิวครบ + ทุกงานสมบูรณ์ = +1 โบนัส</div>
+            <div>• สมบูรณ์ = ขาด comment ไม่เกิน 3 ช่อง (จาก 9 ช่อง)</div>
+          </div>
+          
           <h3 className="font-semibold mb-3">รายละเอียดการรีวิว</h3>
           <div className="space-y-3">
-            {grader.peerReviewScore.details.map((detail, i) => {
+            {pr.details.map((detail, i) => {
               const review = reviews.find(r => r.id === detail.reviewId);
               return (
                 <div key={i} className="bg-slate-800/50 rounded-lg p-4">
@@ -1314,34 +1018,29 @@ function GraderModal({ grader, reviews, onClose }) {
                     </div>
                     <div className="text-right">
                       <div className="text-lg font-bold text-cyan-400">{detail.gradeGiven}/12</div>
-                      {detail.penalty > 0 && (
-                        <div className="text-sm text-red-400">หัก {detail.penalty}</div>
-                      )}
                     </div>
                   </div>
-                  <div className="mt-2 flex items-center gap-2">
-                    {detail.hasAllQualityComments ? (
-                      <span className="text-green-400 text-sm flex items-center gap-1">
-                        <CheckCircle2 className="w-4 h-4" /> Comments มีคุณภาพครบ
-                      </span>
-                    ) : (
-                      <span className="text-yellow-400 text-sm flex items-center gap-1">
-                        <AlertCircle className="w-4 h-4" /> Comments: {detail.qualityCommentCount}/{detail.totalCriteria}
-                      </span>
-                    )}
+                  <div className="mt-2 flex items-center gap-4">
+                    <span className={`text-sm ${detail.isComplete ? 'text-green-400' : 'text-yellow-400'}`}>
+                      {detail.isComplete ? '✓ สมบูรณ์' : '⚠️ ไม่สมบูรณ์'}
+                    </span>
+                    <span className="text-sm text-slate-400">
+                      ใส่ comment {detail.validCommentCount}/9 ช่อง (ขาด {detail.missingComments})
+                    </span>
                   </div>
                   {review && (
-                    <div className="mt-3 space-y-2">
+                    <div className="mt-3 space-y-1 text-sm">
                       {DEFAULT_CRITERIA.map(c => {
-                        const analysis = review.commentAnalysis[c.key];
+                        const comment = review.comments[c.key];
+                        const hasComment = comment && comment.trim() && !/^-+$/.test(comment.trim());
                         return (
-                          <div key={c.key} className="text-sm">
-                            <span className={analysis?.isQuality ? 'text-green-400' : 'text-red-400'}>
-                              {analysis?.isQuality ? '✓' : '✗'}
+                          <div key={c.key} className="flex items-start gap-2">
+                            <span className={hasComment ? 'text-green-400' : 'text-red-400'}>
+                              {hasComment ? '✓' : '✗'}
                             </span>
-                            <span className="text-slate-400 ml-2">{c.name}:</span>
-                            <span className="text-slate-300 ml-2">
-                              {analysis?.originalComment || '-'}
+                            <span className="text-slate-400 w-32 flex-shrink-0">{c.name}:</span>
+                            <span className="text-slate-300 truncate">
+                              {hasComment ? comment : <span className="text-slate-500">ไม่ได้ใส่</span>}
                             </span>
                           </div>
                         );
@@ -1352,6 +1051,23 @@ function GraderModal({ grader, reviews, onClose }) {
               );
             })}
           </div>
+
+          {grader.flags.length > 0 && (
+            <div className="mt-6">
+              <h3 className="font-semibold mb-3 text-yellow-400">⚠️ Flags</h3>
+              <div className="space-y-2">
+                {grader.flags.map((f, i) => (
+                  <div key={i} className={`text-sm px-3 py-2 rounded ${
+                    f.severity === 'alert' ? 'bg-red-900/30 text-red-300' :
+                    f.severity === 'warning' ? 'bg-yellow-900/30 text-yellow-300' :
+                    'bg-slate-700 text-slate-300'
+                  }`}>
+                    {f.message}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

@@ -63,16 +63,12 @@ export function checkCommentQuality(comment) {
     return { hasComment: false, isQuality: false, reason: 'ไม่มี comment' };
   }
   
-  if (trimmed.length < MIN_QUALITY_LENGTH) {
-    return { hasComment: true, isQuality: false, reason: `สั้นเกินไป (${trimmed.length} ตัวอักษร)` };
+  // "-" หรือ "---" นับว่าไม่ใส่ comment
+  if (/^-+$/.test(trimmed)) {
+    return { hasComment: false, isQuality: false, reason: 'ใส่แค่ "-" นับว่าไม่มี comment' };
   }
   
-  for (const pattern of LOW_QUALITY_PATTERNS) {
-    if (pattern.test(trimmed)) {
-      return { hasComment: true, isQuality: false, reason: `ไม่มีความหมาย: "${trimmed}"` };
-    }
-  }
-  
+  // มี comment แล้ว (ไม่ว่าจะสั้นหรือยาว ถือว่าใส่แล้ว)
   return { hasComment: true, isQuality: true, reason: null };
 }
 
@@ -254,23 +250,24 @@ function processCSVData(rawData, headers) {
       if (isCompleted) {
         graders[graderName].completedReviews++;
         
-        let earned = 1;
-        let penalty = review.hasAllQualityComments ? 0 : 0.2;
+        // นับจำนวน comment ที่ใส่จริง (ไม่นับ "-" เป็นการใส่)
+        const validCommentCount = review.hasCommentCount; // จำนวน comment ที่มี (ไม่รวม "-")
+        const missingComments = review.totalCriteria - validCommentCount;
         
-        // ใช้ Math.round เพื่อหลีกเลี่ยง floating point error
-        graders[graderName].peerReviewScore.earnedScore += earned;
-        graders[graderName].peerReviewScore.penalty = Math.round((graders[graderName].peerReviewScore.penalty + penalty) * 10) / 10;
+        // งาน "สมบูรณ์" = ให้คะแนนแล้ว + คอมเมนต์ขาดไม่เกิน 3 ช่อง
+        const isComplete = missingComments <= 3;
+        
         graders[graderName].peerReviewScore.details.push({
           reviewId: review.id,
           studentReviewed: studentName,
           studentId: studentInfo.studentId,
           gradeGiven: gradeGiven,
-          hasAllQualityComments: review.hasAllQualityComments,
-          qualityCommentCount: review.qualityCommentCount,
+          validCommentCount: validCommentCount,
+          missingComments: missingComments,
+          isComplete: isComplete,
           totalCriteria: review.totalCriteria,
-          scoreEarned: earned,
-          penalty: penalty,
-          keywords: review.allKeywords
+          keywords: review.allKeywords,
+          comments: review.comments // เก็บไว้สำหรับตรวจสอบ G
         });
         graders[graderName].allKeywords.push(...review.allKeywords);
       }
@@ -315,19 +312,53 @@ function processCSVData(rawData, headers) {
     }
   });
 
-  // Post-process: Graders peer review score
+  // Post-process: Graders peer review score (เงื่อนไขใหม่)
   Object.values(graders).forEach(grader => {
     const pr = grader.peerReviewScore;
-    // Round to avoid floating point errors
-    pr.netScore = Math.round((pr.earnedScore - pr.penalty) * 10) / 10;
-    pr.netScore = Math.max(0, pr.netScore);
+    const details = pr.details;
+    
+    // นับงานที่รีวิวแล้ว
+    const reviewedCount = details.length;
+    
+    // นับงานที่ "สมบูรณ์" (ขาด comment ไม่เกิน 3 ช่อง)
+    const completeCount = details.filter(d => d.isComplete).length;
+    
+    // คำนวณคะแนน
+    // - ทุกงานที่รีวิว = 1 คะแนน
+    // - โบนัส +1 ถ้ารีวิวครบตามที่ได้รับ AND ทุกงานสมบูรณ์
+    const baseScore = reviewedCount; // 1 คะแนนต่องานที่รีวิว
+    
+    // โบนัส: ต้องรีวิวครบตามที่ได้รับ + ทุกงานต้องสมบูรณ์
+    const reviewedAll = reviewedCount === grader.assignedReviews && grader.assignedReviews > 0;
+    const allComplete = completeCount === reviewedCount && reviewedCount > 0;
+    const bonus = (reviewedAll && allComplete) ? 1 : 0;
+    
+    pr.baseScore = baseScore;
+    pr.bonus = bonus;
+    pr.netScore = baseScore + bonus;
+    pr.reviewedCount = reviewedCount;
+    pr.completeCount = completeCount;
+    pr.fullScore = grader.assignedReviews + (grader.assignedReviews > 0 ? 1 : 0); // คะแนนเต็ม = จำนวนงาน + 1 โบนัส
+    
     grader.allKeywords = [...new Set(grader.allKeywords)];
     
+    // Flags
     if (grader.completedReviews === 0 && grader.assignedReviews > 0) {
       grader.flags.push({ type: 'no_review_done', message: `ได้รับ ${grader.assignedReviews} งานแต่ยังไม่รีวิวเลย`, severity: 'alert' });
     }
-    if (pr.penalty > 0) {
-      grader.flags.push({ type: 'comment_penalty', message: `ถูกหัก ${pr.penalty} (comment ไม่ครบ/ไม่มีคุณภาพ)`, severity: 'warning' });
+    if (reviewedAll && !allComplete) {
+      grader.flags.push({ type: 'incomplete_comments', message: `รีวิวครบแต่คอมเมนต์ไม่สมบูรณ์ (${completeCount}/${reviewedCount} งานสมบูรณ์) - ไม่ได้โบนัส`, severity: 'warning' });
+    }
+    if (!reviewedAll && grader.assignedReviews > 0) {
+      grader.flags.push({ type: 'incomplete_review', message: `รีวิวไม่ครบ (${reviewedCount}/${grader.assignedReviews} งาน)`, severity: 'warning' });
+    }
+    // Flag: ได้รับงานไม่เท่ากับ 3
+    if (grader.assignedReviews !== 3 && grader.assignedReviews > 0) {
+      grader.flags.push({ 
+        type: 'unusual_assignment', 
+        message: `ได้รับงาน ${grader.assignedReviews} งาน (ไม่ใช่ 3)`, 
+        severity: 'info' 
+      });
     }
   });
 
