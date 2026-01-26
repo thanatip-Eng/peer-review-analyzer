@@ -124,6 +124,15 @@ function processCSVData(rawData, headers) {
   
   const colIndex = detectColumns(headers);
   console.log('Column mapping:', colIndex);
+  
+  // Debug: แสดงตัวอย่างข้อมูลแถวแรก
+  if (rawData.length > 0) {
+    const firstRow = rawData[0];
+    console.log('=== Debug First Row ===');
+    console.log('Student Name (owner):', firstRow[colIndex.studentName]);
+    console.log('Review Assigned (grader):', firstRow[colIndex.reviewAssigned]);
+    console.log('Review Completed (grade):', firstRow[colIndex.reviewCompleted]);
+  }
 
   rawData.forEach((row, index) => {
     // *** ความเข้าใจใหม่ตาม Canvas ***
@@ -248,8 +257,9 @@ function processCSVData(rawData, headers) {
         let earned = 1;
         let penalty = review.hasAllQualityComments ? 0 : 0.2;
         
+        // ใช้ Math.round เพื่อหลีกเลี่ยง floating point error
         graders[graderName].peerReviewScore.earnedScore += earned;
-        graders[graderName].peerReviewScore.penalty += penalty;
+        graders[graderName].peerReviewScore.penalty = Math.round((graders[graderName].peerReviewScore.penalty + penalty) * 10) / 10;
         graders[graderName].peerReviewScore.details.push({
           reviewId: review.id,
           studentReviewed: studentName,
@@ -308,7 +318,9 @@ function processCSVData(rawData, headers) {
   // Post-process: Graders peer review score
   Object.values(graders).forEach(grader => {
     const pr = grader.peerReviewScore;
-    pr.netScore = Math.max(0, Math.round((pr.earnedScore - pr.penalty) * 100) / 100);
+    // Round to avoid floating point errors
+    pr.netScore = Math.round((pr.earnedScore - pr.penalty) * 10) / 10;
+    pr.netScore = Math.max(0, pr.netScore);
     grader.allKeywords = [...new Set(grader.allKeywords)];
     
     if (grader.completedReviews === 0 && grader.assignedReviews > 0) {
@@ -335,31 +347,35 @@ function processCSVData(rawData, headers) {
 }
 
 function detectColumns(headers) {
-  const normalized = headers.map(h => h.toLowerCase().replace(/\s+/g, ' '));
+  // ใช้ index โดยตรงตาม Canvas export format
+  // Headers: Student Name, Review assigned, Review completed, Grade Average, Submission Comments, ...
+  console.log('Raw headers:', headers);
   
-  const findHeader = (patterns) => {
-    for (const pattern of patterns) {
-      const idx = normalized.findIndex(h => h.includes(pattern));
-      if (idx !== -1) return headers[idx];
-    }
-    return null;
-  };
-
+  // สร้าง mapping จาก header name (case-insensitive)
+  const headerMap = {};
+  headers.forEach((h, i) => {
+    const normalized = h.toLowerCase().replace(/\s+/g, ' ').trim();
+    headerMap[normalized] = h;
+  });
+  
+  console.log('Header map:', headerMap);
+  
   return {
-    studentName: findHeader(['student name']) || headers[0],
-    reviewAssigned: findHeader(['review', 'assigned']) || headers[1],
-    reviewCompleted: findHeader(['review', 'completed']) || headers[2],
-    gradeAverage: findHeader(['grade average', 'average']) || headers[3],
-    submissionComments: findHeader(['submission comment']) || headers[4],
-    criteria1: findHeader(['criteria #1']) || headers[5],
-    criteria2: findHeader(['criteria #0']) || headers[6],
-    criteria3: headers[7] || 'Column1',
-    criteria5: headers[8] || '_1',
-    criteria6: headers[9] || '_2',
-    criteria7: headers[10] || '_3',
-    criteria10: headers[11] || '_4',
-    criteria11: headers[12] || '_5',
-    criteria8: headers[13] || '_6'
+    // ใช้ตำแหน่ง index โดยตรงเพื่อความแน่นอน
+    studentName: headers[0],      // Student Name = เจ้าของงาน
+    reviewAssigned: headers[1],   // Review assigned = Grader (คนรีวิว)
+    reviewCompleted: headers[2],  // Review completed = คะแนนที่ให้
+    gradeAverage: headers[3],     // Grade Average
+    submissionComments: headers[4], // Submission Comments
+    criteria1: headers[5],        // Comments for Criteria #1
+    criteria2: headers[6],        // Comments for Criteria #0
+    criteria3: headers[7],        // Column1
+    criteria5: headers[8],        // _1
+    criteria6: headers[9],        // _2
+    criteria7: headers[10],       // _3
+    criteria10: headers[11],      // _4
+    criteria11: headers[12],      // _5
+    criteria8: headers[13]        // _6
   };
 }
 
