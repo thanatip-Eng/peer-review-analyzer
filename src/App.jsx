@@ -1,8 +1,8 @@
 // src/App.jsx
 import React, { useState, useCallback, useMemo } from 'react';
-import { Upload, Users, BarChart2, Settings, Search, Download, ChevronRight, AlertCircle, CheckCircle2, XCircle, FileText, Brain } from 'lucide-react';
+import { Upload, Users, BarChart2, Settings, Search, Download, ChevronRight, AlertCircle, CheckCircle2, XCircle, FileText } from 'lucide-react';
 import { parseCSV, DEFAULT_CRITERIA, analyzeCommentCompleteness, aggregateStudentAnalysis } from './utils/csvParser';
-import { calculateStudentTotalScore, calculateAllStudentsScores, calculateClassStatistics, DEFAULT_SETTINGS } from './utils/scoreCalculator';
+import { calculateAllStudentsScores, calculateClassStatistics, DEFAULT_SETTINGS } from './utils/scoreCalculator';
 
 export default function App() {
   const [data, setData] = useState(null);
@@ -23,7 +23,10 @@ export default function App() {
     setError(null);
 
     try {
+      console.log('Parsing CSV file:', file.name);
       const result = await parseCSV(file);
+      console.log('Parse result:', result.stats);
+      
       const allScores = calculateAllStudentsScores({
         students: result.students,
         reviews: result.reviews,
@@ -32,10 +35,13 @@ export default function App() {
         settings,
         aggregateFunc: aggregateStudentAnalysis
       });
+      console.log('Scores calculated, sample:', allScores[0]);
+      
       const classStats = calculateClassStatistics(allScores);
       setData({ ...result, allScores, classStats });
       setActiveTab('overview');
     } catch (err) {
+      console.error('Error:', err);
       setError(`เกิดข้อผิดพลาด: ${err.message}`);
     } finally {
       setLoading(false);
@@ -141,9 +147,9 @@ export default function App() {
         {/* Error */}
         {error && (
           <div className="bg-red-900/30 border border-red-500/30 rounded-xl p-4 mb-6 flex items-center gap-3">
-            <AlertCircle className="w-5 h-5 text-red-400" />
+            <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />
             <span className="text-red-300">{error}</span>
-            <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-300">×</button>
+            <button onClick={() => setError(null)} className="ml-auto text-red-400 hover:text-red-300 text-xl">×</button>
           </div>
         )}
 
@@ -260,11 +266,11 @@ export default function App() {
                           <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">รีวิว</th>
                           <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนน (%)</th>
                           <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">เกรด</th>
-                          <th className="px-4 py-3 text-center text-sm font-medium text-slate-400"></th>
+                          <th className="px-4 py-3"></th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-white/5">
-                        {filteredStudents.slice(0, 50).map((student) => {
+                        {filteredStudents.slice(0, 100).map((student) => {
                           const studentData = data.students[student.studentName];
                           return (
                             <tr key={student.studentName} className="hover:bg-white/5 transition">
@@ -296,9 +302,9 @@ export default function App() {
                       </tbody>
                     </table>
                   </div>
-                  {filteredStudents.length > 50 && (
+                  {filteredStudents.length > 100 && (
                     <div className="px-4 py-3 bg-slate-800/30 text-center text-slate-400 text-sm">
-                      แสดง 50 จาก {filteredStudents.length} รายการ
+                      แสดง 100 จาก {filteredStudents.length} รายการ - ใช้การค้นหาเพื่อกรอง
                     </div>
                   )}
                 </div>
@@ -331,7 +337,7 @@ export default function App() {
                         <input
                           type="number"
                           value={settings.weights.completeness * 100}
-                          onChange={(e) => setSettings(s => ({ ...s, weights: { ...s.weights, completeness: parseFloat(e.target.value) / 100 || 0.4 }}))}
+                          onChange={(e) => setSettings(s => ({ ...s, weights: { ...s.weights, completeness: parseFloat(e.target.value) / 100 || 0.5 }}))}
                           className="w-full px-4 py-2 bg-slate-800 border border-white/10 rounded-lg text-white"
                         />
                       </div>
@@ -340,7 +346,7 @@ export default function App() {
                         <input
                           type="number"
                           value={settings.weights.quality * 100}
-                          onChange={(e) => setSettings(s => ({ ...s, weights: { ...s.weights, quality: parseFloat(e.target.value) / 100 || 0.4 }}))}
+                          onChange={(e) => setSettings(s => ({ ...s, weights: { ...s.weights, quality: parseFloat(e.target.value) / 100 || 0.3 }}))}
                           className="w-full px-4 py-2 bg-slate-800 border border-white/10 rounded-lg text-white"
                         />
                       </div>
@@ -367,11 +373,11 @@ export default function App() {
       </div>
 
       {/* Student Detail Modal */}
-      {selectedStudent && (
+      {selectedStudent && data && (
         <StudentDetailModal
           student={selectedStudent}
-          studentData={data?.students[selectedStudent.studentName]}
-          reviews={data?.reviews.filter(r => r.reviewerName === selectedStudent.studentName)}
+          studentData={data.students[selectedStudent.studentName]}
+          reviews={data.reviews.filter(r => r.reviewerName === selectedStudent.studentName)}
           criteriaList={criteriaList}
           onClose={() => setSelectedStudent(null)}
         />
@@ -393,7 +399,7 @@ function StatCard({ label, value, icon: Icon, color }) {
       <div className="flex items-center gap-3">
         <Icon className="w-6 h-6" />
         <div>
-          <div className="text-2xl font-bold">{value.toLocaleString()}</div>
+          <div className="text-2xl font-bold">{typeof value === 'number' ? value.toLocaleString() : value}</div>
           <div className="text-sm text-slate-400">{label}</div>
         </div>
       </div>
@@ -406,15 +412,15 @@ function StudentDetailModal({ student, studentData, reviews, criteriaList, onClo
   if (!student || !studentData) return null;
 
   return (
-    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-white/10 rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden">
+    <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-slate-900 border border-white/10 rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden" onClick={e => e.stopPropagation()}>
         <div className="bg-gradient-to-r from-cyan-900/50 to-purple-900/50 p-6 border-b border-white/10">
           <div className="flex justify-between items-start">
             <div>
               <h2 className="text-xl font-bold">{studentData.fullName}</h2>
               <p className="text-slate-400 font-mono">{studentData.studentId}</p>
             </div>
-            <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg text-2xl">×</button>
+            <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg text-2xl leading-none">×</button>
           </div>
           <div className="flex gap-6 mt-4">
             <div>
@@ -422,7 +428,7 @@ function StudentDetailModal({ student, studentData, reviews, criteriaList, onClo
               <div className="text-sm text-slate-400">คะแนนเฉลี่ย</div>
             </div>
             <div>
-              <div className="text-3xl font-bold text-purple-400">{student.totalReviewsCompleted}</div>
+              <div className="text-3xl font-bold text-purple-400">{student.totalReviewsCompleted}/{student.totalReviewsAssigned}</div>
               <div className="text-sm text-slate-400">รีวิวที่ทำ</div>
             </div>
             <div>
@@ -433,57 +439,67 @@ function StudentDetailModal({ student, studentData, reviews, criteriaList, onClo
         </div>
 
         <div className="p-6 overflow-y-auto max-h-[calc(90vh-200px)]">
-          <h3 className="text-lg font-semibold mb-4">รายละเอียดการรีวิว</h3>
-          {reviews?.map((review) => {
+          <h3 className="text-lg font-semibold mb-4">รายละเอียดการรีวิว ({reviews.length} งาน)</h3>
+          {reviews.map((review) => {
             const completeness = analyzeCommentCompleteness(review, criteriaList);
             return (
               <div key={review.id} className="bg-slate-800/50 rounded-xl p-4 mb-4">
                 <div className="flex justify-between items-start mb-3">
                   <div>
                     <span className="text-sm text-slate-400">รีวิวงานของ:</span>
-                    <div className="font-medium">{review.revieweeFullName}</div>
+                    <div className="font-medium">{review.revieweeFullName || review.revieweeName}</div>
                     <div className="text-sm text-slate-500 font-mono">{review.revieweeId}</div>
                   </div>
                   <div className="text-right">
-                    <div className="text-lg font-bold text-cyan-400">{review.gradeGiven !== null ? review.gradeGiven : '-'}/12</div>
+                    <div className="text-lg font-bold text-cyan-400">
+                      {review.gradeGiven !== null ? review.gradeGiven : '-'}/12
+                    </div>
                     <div className="text-sm text-slate-400">คะแนนที่ให้</div>
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 mb-3">
-                  {completeness.completeness === 100 ? (
-                    <CheckCircle2 className="w-5 h-5 text-green-400" />
-                  ) : (
-                    <AlertCircle className="w-5 h-5 text-yellow-400" />
-                  )}
-                  <span className={completeness.completeness === 100 ? 'text-green-400' : 'text-yellow-400'}>
-                    คอมเมนต์: {completeness.commentedCriteria}/{completeness.totalCriteria} criteria ({Math.round(completeness.completeness)}%)
-                  </span>
-                </div>
-
-                {completeness.missingCriteria.length > 0 && (
-                  <div className="bg-red-900/20 border border-red-500/20 rounded-lg p-3 mb-3">
-                    <div className="text-sm text-red-400 font-medium mb-1">ขาดคอมเมนต์ใน criteria:</div>
-                    <div className="flex flex-wrap gap-2">
-                      {completeness.missingCriteria.map(c => (
-                        <span key={c.key} className="px-2 py-1 bg-red-900/30 rounded text-sm text-red-300">{c.name}</span>
-                      ))}
+                {review.gradeGiven !== null && (
+                  <>
+                    <div className="flex items-center gap-2 mb-3">
+                      {completeness.completeness === 100 ? (
+                        <CheckCircle2 className="w-5 h-5 text-green-400" />
+                      ) : (
+                        <AlertCircle className="w-5 h-5 text-yellow-400" />
+                      )}
+                      <span className={completeness.completeness === 100 ? 'text-green-400' : 'text-yellow-400'}>
+                        คอมเมนต์: {completeness.commentedCriteria}/{completeness.totalCriteria} criteria ({Math.round(completeness.completeness)}%)
+                      </span>
                     </div>
-                  </div>
+
+                    {completeness.missingCriteria.length > 0 && (
+                      <div className="bg-red-900/20 border border-red-500/20 rounded-lg p-3 mb-3">
+                        <div className="text-sm text-red-400 font-medium mb-1">ขาดคอมเมนต์ใน criteria:</div>
+                        <div className="flex flex-wrap gap-2">
+                          {completeness.missingCriteria.map(c => (
+                            <span key={c.key} className="px-2 py-1 bg-red-900/30 rounded text-xs text-red-300">{c.name}</span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      {criteriaList.map(criteria => {
+                        const comment = review.comments[criteria.key];
+                        if (!comment || comment.trim() === '' || comment.trim() === '-') return null;
+                        return (
+                          <div key={criteria.key} className="bg-slate-900/50 rounded-lg p-3">
+                            <div className="text-xs text-slate-500 mb-1">{criteria.name}</div>
+                            <div className="text-sm">{comment}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
                 )}
 
-                <div className="space-y-2">
-                  {criteriaList.map(criteria => {
-                    const comment = review.comments[criteria.key];
-                    if (!comment || comment.trim() === '') return null;
-                    return (
-                      <div key={criteria.key} className="bg-slate-900/50 rounded-lg p-3">
-                        <div className="text-xs text-slate-500 mb-1">{criteria.name}</div>
-                        <div className="text-sm">{comment}</div>
-                      </div>
-                    );
-                  })}
-                </div>
+                {review.gradeGiven === null && (
+                  <div className="text-yellow-400 text-sm">⚠️ ยังไม่ได้ทำรีวิวนี้</div>
+                )}
               </div>
             );
           })}
