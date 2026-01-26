@@ -1,6 +1,6 @@
 // src/App.jsx
 import React, { useState, useCallback, useMemo } from 'react';
-import { Upload, Users, Search, Download, ChevronRight, AlertCircle, CheckCircle2, XCircle, AlertTriangle, UserCheck } from 'lucide-react';
+import { Upload, Users, Search, Download, ChevronRight, AlertCircle, CheckCircle2, XCircle, AlertTriangle, UserCheck, BarChart2 } from 'lucide-react';
 import { parseCSV, DEFAULT_CRITERIA, getFlaggedStudents, getFlaggedGraders } from './utils/csvParser';
 
 export default function App() {
