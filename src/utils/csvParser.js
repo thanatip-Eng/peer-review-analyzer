@@ -297,6 +297,16 @@ function processCSVData(rawData, headers) {
         isReliable: grades.length >= 2 && stdDev < 3
       };
       
+      // เพิ่ม flag สำหรับคะแนนเกิน 12
+      const overMaxGrades = grades.filter(g => g > 12);
+      if (overMaxGrades.length > 0) {
+        student.flags.push({ 
+          type: 'score_over_max', 
+          message: `⚠️ มีคะแนนเกิน 12: ${overMaxGrades.join(', ')}`, 
+          severity: 'alert' 
+        });
+      }
+      
       if (stdDev >= 3) {
         student.flags.push({ type: 'high_variance', message: `คะแนนแตกต่างมาก (SD=${stdDev.toFixed(2)})`, severity: 'warning' });
       }
@@ -358,6 +368,16 @@ function processCSVData(rawData, headers) {
         type: 'unusual_assignment', 
         message: `ได้รับงาน ${grader.assignedReviews} งาน (ไม่ใช่ 3)`, 
         severity: 'info' 
+      });
+    }
+    // Flag: ให้คะแนนเกิน 12
+    const overMaxGrades = details.filter(d => d.gradeGiven > 12);
+    if (overMaxGrades.length > 0) {
+      const overGradesList = overMaxGrades.map(d => `${d.studentReviewed}: ${d.gradeGiven}`).join(', ');
+      grader.flags.push({ 
+        type: 'gave_score_over_max', 
+        message: `⚠️ ให้คะแนนเกิน 12: ${overGradesList}`, 
+        severity: 'alert' 
       });
     }
   });

@@ -609,7 +609,37 @@ function GradersTab({ graders, searchQuery, setSearchQuery, onSelect, onExport }
 }
 
 function AdminTab({ flaggedStudents, flaggedGraders, data }) {
-  const [activeSection, setActiveSection] = useState('unusual'); // unusual, flagged, inconsistent
+  const [activeSection, setActiveSection] = useState('overmax'); // overmax, unusual, flagged, inconsistent
+
+  // กรณีคะแนนเกิน 12
+  const overMaxScores = useMemo(() => {
+    if (!data) return { students: [], graders: [] };
+    
+    // Students ที่ได้รับคะแนนเกิน 12
+    const studentsOver = Object.values(data.students)
+      .filter(s => s.workScore.grades && s.workScore.grades.some(g => g > 12))
+      .map(s => ({
+        ...s,
+        overGrades: s.workScore.grades.filter(g => g > 12)
+      }));
+    
+    // Graders ที่ให้คะแนนเกิน 12
+    const gradersOver = [];
+    Object.values(data.graders).forEach(g => {
+      g.peerReviewScore.details.forEach(d => {
+        if (d.gradeGiven > 12) {
+          gradersOver.push({
+            graderId: g.graderId,
+            graderFullName: g.fullName,
+            studentReviewed: d.studentReviewed,
+            gradeGiven: d.gradeGiven
+          });
+        }
+      });
+    });
+    
+    return { students: studentsOver, graders: gradersOver };
+  }, [data]);
 
   // กรณีพิเศษ: ได้รับงานไม่เท่ากับ 3
   const unusualAssignments = useMemo(() => {
@@ -671,10 +701,18 @@ function AdminTab({ flaggedStudents, flaggedGraders, data }) {
     return results;
   }, [data]);
 
+  const totalOverMax = overMaxScores.students.length + overMaxScores.graders.length;
+
   return (
     <div className="space-y-6">
       {/* Section Tabs */}
-      <div className="flex gap-2 bg-slate-800/50 p-1 rounded-xl">
+      <div className="flex gap-2 bg-slate-800/50 p-1 rounded-xl flex-wrap">
+        <button
+          onClick={() => setActiveSection('overmax')}
+          className={`flex-1 px-4 py-2 rounded-lg transition ${activeSection === 'overmax' ? 'bg-red-600 text-white' : 'text-slate-400 hover:text-white'}`}
+        >
+          🚫 คะแนนเกิน 12 ({totalOverMax})
+        </button>
         <button
           onClick={() => setActiveSection('unusual')}
           className={`flex-1 px-4 py-2 rounded-lg transition ${activeSection === 'unusual' ? 'bg-yellow-600 text-white' : 'text-slate-400 hover:text-white'}`}
@@ -694,6 +732,91 @@ function AdminTab({ flaggedStudents, flaggedGraders, data }) {
           🔍 คะแนน-คอมเมนต์ไม่สอดคล้อง ({inconsistentReviews.length})
         </button>
       </div>
+
+      {/* Over Max Score Section */}
+      {activeSection === 'overmax' && (
+        <div className="space-y-6">
+          {/* Students ที่ได้รับคะแนนเกิน 12 */}
+          <div className="bg-slate-900/50 border border-red-500/30 rounded-2xl p-6">
+            <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-red-400">
+              🚫 นักศึกษาที่ได้รับคะแนนเกิน 12 ({overMaxScores.students.length} คน)
+            </h3>
+            
+            {overMaxScores.students.length === 0 ? (
+              <div className="text-center py-8 text-green-400">
+                <CheckCircle2 className="w-12 h-12 mx-auto mb-2" />
+                ไม่มีนักศึกษาที่ได้รับคะแนนเกิน 12
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-slate-800/50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">รหัส</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">ชื่อ-นามสกุล</th>
+                      <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนนที่ได้รับ</th>
+                      <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนนเกิน 12</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {overMaxScores.students.map(s => (
+                      <tr key={s.studentName} className="hover:bg-white/5">
+                        <td className="px-4 py-3 font-mono text-sm">{s.studentId}</td>
+                        <td className="px-4 py-3">{s.fullName}</td>
+                        <td className="px-4 py-3 text-center text-slate-400">
+                          {s.workScore.grades.join(', ')}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <span className="text-red-400 font-bold">{s.overGrades.join(', ')}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Graders ที่ให้คะแนนเกิน 12 */}
+          <div className="bg-slate-900/50 border border-red-500/30 rounded-2xl p-6">
+            <h3 className="text-lg font-semibold mb-4 flex items-center gap-2 text-red-400">
+              🚫 Graders ที่ให้คะแนนเกิน 12 ({overMaxScores.graders.length} รายการ)
+            </h3>
+            
+            {overMaxScores.graders.length === 0 ? (
+              <div className="text-center py-8 text-green-400">
+                <CheckCircle2 className="w-12 h-12 mx-auto mb-2" />
+                ไม่มี Grader ที่ให้คะแนนเกิน 12
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead className="bg-slate-800/50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">รหัส Grader</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">ชื่อ Grader</th>
+                      <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">รีวิวงานของ</th>
+                      <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนนที่ให้</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {overMaxScores.graders.map((g, i) => (
+                      <tr key={i} className="hover:bg-white/5">
+                        <td className="px-4 py-3 font-mono text-sm">{g.graderId}</td>
+                        <td className="px-4 py-3">{g.graderFullName}</td>
+                        <td className="px-4 py-3 text-slate-400">{g.studentReviewed}</td>
+                        <td className="px-4 py-3 text-center">
+                          <span className="text-red-400 font-bold">{g.gradeGiven}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Unusual Assignments Section */}
       {activeSection === 'unusual' && (
