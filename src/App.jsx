@@ -178,7 +178,14 @@ export default function App() {
 
   // ฟังก์ชันคำนวณใหม่ตาม approved/rejected keywords
   const recalculateWithKeywords = useCallback(() => {
-    if (!originalData) return;
+    if (!data || !originalData) {
+      console.log('No data or originalData');
+      return;
+    }
+    
+    console.log('=== Recalculating with keywords ===');
+    console.log('Approved keywords:', approvedKeywords);
+    console.log('Rejected keywords:', rejectedKeywords);
     
     // เก็บคะแนนเดิมก่อนคำนวณใหม่
     const oldScores = {};
@@ -193,21 +200,19 @@ export default function App() {
     const newGraders = {};
     
     Object.values(originalData.graders).forEach(grader => {
-      const newGrader = {
-        ...grader,
-        peerReviewScore: {
-          fullScore: grader.assignedReviews,
-          earnedScore: 0,
-          penalty: 0,
-          netScore: 0,
-          details: []
-        },
-        flags: []
+      const newGrader = JSON.parse(JSON.stringify(grader)); // deep clone
+      newGrader.peerReviewScore = {
+        fullScore: grader.assignedReviews,
+        earnedScore: 0,
+        penalty: 0,
+        netScore: 0,
+        details: []
       };
+      newGrader.flags = [];
       
       // วิเคราะห์แต่ละ review ใหม่
-      grader.peerReviewScore.details.forEach(detail => {
-        const review = originalData.reviews.find(r => r.id === detail.reviewId);
+      grader.reviewsMade.forEach(reviewId => {
+        const review = originalData.reviews.find(r => r.id === reviewId);
         if (!review || !review.isCompleted) return;
         
         // ตรวจสอบคุณภาพ comment ใหม่ตาม approved/rejected keywords
@@ -216,7 +221,7 @@ export default function App() {
         
         DEFAULT_CRITERIA.forEach(criteria => {
           const comment = review.comments[criteria.key];
-          const isQuality = checkCommentQualityWithKeywords(comment, approvedKeywords, rejectedKeywords);
+          const isQuality = checkQualityWithKeywords(comment, approvedKeywords, rejectedKeywords);
           if (isQuality) qualityCount++;
         });
         
@@ -227,10 +232,16 @@ export default function App() {
         newGrader.peerReviewScore.earnedScore += earned;
         newGrader.peerReviewScore.penalty = Math.round((newGrader.peerReviewScore.penalty + penalty) * 10) / 10;
         newGrader.peerReviewScore.details.push({
-          ...detail,
+          reviewId: review.id,
+          studentReviewed: review.studentName,
+          studentId: review.studentId,
+          gradeGiven: review.gradeGiven,
           hasAllQualityComments: hasAllQuality,
           qualityCommentCount: qualityCount,
-          penalty: penalty
+          totalCriteria: totalCriteria,
+          scoreEarned: earned,
+          penalty: penalty,
+          keywords: review.allKeywords || []
         });
       });
       
@@ -253,19 +264,29 @@ export default function App() {
       const oldScore = oldScores[name];
       const newScore = newGraders[name].peerReviewScore;
       
-      if (oldScore && (oldScore.netScore !== newScore.netScore || oldScore.penalty !== newScore.penalty)) {
-        changes.push({
-          graderName: name,
-          graderId: newGraders[name].graderId,
-          fullName: newGraders[name].fullName,
-          oldPenalty: oldScore.penalty,
-          newPenalty: newScore.penalty,
-          oldNetScore: oldScore.netScore,
-          newNetScore: newScore.netScore,
-          diff: Math.round((newScore.netScore - oldScore.netScore) * 10) / 10
-        });
+      if (oldScore) {
+        const oldNet = Math.round(oldScore.netScore * 10) / 10;
+        const newNet = Math.round(newScore.netScore * 10) / 10;
+        const oldPen = Math.round(oldScore.penalty * 10) / 10;
+        const newPen = Math.round(newScore.penalty * 10) / 10;
+        
+        if (oldNet !== newNet || oldPen !== newPen) {
+          changes.push({
+            graderName: name,
+            graderId: newGraders[name].graderId,
+            fullName: newGraders[name].fullName,
+            oldPenalty: oldPen,
+            newPenalty: newPen,
+            oldNetScore: oldNet,
+            newNetScore: newNet,
+            diff: Math.round((newNet - oldNet) * 10) / 10
+          });
+        }
       }
     });
+    
+    console.log('Score changes found:', changes.length);
+    console.log('Changes:', changes);
     
     // Update data
     setData(prev => ({
@@ -273,29 +294,42 @@ export default function App() {
       graders: newGraders,
       stats: {
         ...prev.stats,
-        reviewsWithPenalty: Object.values(newGraders).reduce((sum, g) => sum + (g.peerReviewScore.penalty > 0 ? g.peerReviewScore.details.filter(d => d.penalty > 0).length : 0), 0)
+        reviewsWithPenalty: Object.values(newGraders).reduce((sum, g) => 
+          sum + g.peerReviewScore.details.filter(d => d.penalty > 0).length, 0)
       }
     }));
     
     setScoreChanges(changes);
-  }, [originalData, data, approvedKeywords, rejectedKeywords]);
+    
+    // แจ้งเตือน
+    alert(`อัพเดทคะแนนสำเร็จ!\n\nมี ${changes.length} คนที่คะแนนเปลี่ยนแปลง`);
+    
+  }, [data, originalData, approvedKeywords, rejectedKeywords]);
 
   // ฟังก์ชันตรวจสอบคุณภาพ comment พร้อม approved/rejected keywords
-  const checkCommentQualityWithKeywords = (comment, approved, rejected) => {
+  const checkQualityWithKeywords = (comment, approved, rejected) => {
     if (!comment || typeof comment !== 'string') return false;
     const trimmed = comment.trim();
     if (trimmed === '') return false;
+    
+    const lowerComment = trimmed.toLowerCase();
+    
+    // ถ้า comment ตรงกับ approved list = มีคุณภาพ
+    for (const kw of approved) {
+      if (lowerComment === kw.toLowerCase() || lowerComment.includes(kw.toLowerCase())) {
+        return true;
+      }
+    }
+    
+    // ถ้า comment ตรงกับ rejected list = ไม่มีคุณภาพ  
+    for (const kw of rejected) {
+      if (lowerComment === kw.toLowerCase()) {
+        return false;
+      }
+    }
+    
+    // ตรวจสอบความยาวขั้นต่ำ
     if (trimmed.length < 5) return false;
-    
-    // ถ้า comment อยู่ใน approved list = มีคุณภาพ
-    if (approved.some(kw => trimmed.toLowerCase().includes(kw.toLowerCase()))) {
-      return true;
-    }
-    
-    // ถ้า comment อยู่ใน rejected list = ไม่มีคุณภาพ
-    if (rejected.some(kw => trimmed.toLowerCase() === kw.toLowerCase())) {
-      return false;
-    }
     
     // ตรวจสอบตาม pattern เดิม
     const lowQualityPatterns = [
