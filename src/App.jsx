@@ -1,7 +1,8 @@
 // src/App.jsx
 import React, { useState, useCallback, useMemo } from 'react';
-import { Upload, Users, Search, Download, ChevronRight, AlertCircle, CheckCircle2, XCircle, AlertTriangle, UserCheck, BarChart2, FileText, ClipboardList } from 'lucide-react';
+import { Upload, Users, Search, Download, ChevronRight, AlertCircle, CheckCircle2, XCircle, AlertTriangle, UserCheck, BarChart2, FileText, ClipboardList, Filter } from 'lucide-react';
 import { parseCSV, DEFAULT_CRITERIA, getFlaggedStudents, getFlaggedGraders } from './utils/csvParser';
+import Papa from 'papaparse';
 
 export default function App() {
   const [data, setData] = useState(null);
@@ -11,6 +12,88 @@ export default function App() {
   const [selectedGrader, setSelectedGrader] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState('overview');
+  
+  // Group management
+  const [groupData, setGroupData] = useState(null); // ข้อมูล group จากไฟล์
+  const [groupSets, setGroupSets] = useState([]); // รายชื่อ group sets ทั้งหมด
+  const [selectedGroupSet, setSelectedGroupSet] = useState(''); // group set ที่เลือกใช้
+  const [groupFilter, setGroupFilter] = useState(''); // filter สำหรับหน้า admin
+
+  // Parse student/group file
+  const handleGroupFileUpload = useCallback(async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    Papa.parse(file, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        try {
+          const headers = Object.keys(results.data[0] || {});
+          console.log('Group file headers:', headers);
+          
+          // หา group set columns (column 7 เป็นต้นไป = index 6+)
+          // Column A-F: Student, ID, SIS User ID, SIS Login ID, Integration ID, Section
+          const fixedColumns = ['Student', 'ID', 'SIS User ID', 'SIS Login ID', 'Integration ID', 'Section'];
+          const groupSetColumns = headers.filter(h => !fixedColumns.includes(h) && h.trim() !== '');
+          
+          console.log('Found group sets:', groupSetColumns);
+          
+          // สร้าง mapping: studentId -> { groupSet1: groupName, groupSet2: groupName, ... }
+          const studentGroups = {};
+          results.data.forEach(row => {
+            const studentId = row['SIS User ID'] || row['ID'] || '';
+            if (!studentId) return;
+            
+            studentGroups[studentId] = {
+              studentName: row['Student'] || '',
+              section: row['Section'] || ''
+            };
+            
+            groupSetColumns.forEach(gs => {
+              studentGroups[studentId][gs] = row[gs] || '';
+            });
+          });
+          
+          setGroupData(studentGroups);
+          setGroupSets(groupSetColumns);
+          
+          // ถ้ามี group set เดียว ให้เลือกอัตโนมัติ
+          if (groupSetColumns.length === 1) {
+            setSelectedGroupSet(groupSetColumns[0]);
+          } else if (groupSetColumns.length > 1) {
+            setSelectedGroupSet(''); // ให้ user เลือก
+          }
+          
+          console.log('Parsed group data:', Object.keys(studentGroups).length, 'students');
+          
+        } catch (err) {
+          console.error('Error parsing group file:', err);
+          setError(`เกิดข้อผิดพลาดในการอ่านไฟล์ group: ${err.message}`);
+        }
+      },
+      error: (err) => {
+        setError(`เกิดข้อผิดพลาด: ${err.message}`);
+      }
+    });
+  }, []);
+
+  // Get group for a student
+  const getStudentGroup = useCallback((studentId) => {
+    if (!groupData || !selectedGroupSet || !studentId) return '';
+    const student = groupData[studentId];
+    return student ? (student[selectedGroupSet] || '') : '';
+  }, [groupData, selectedGroupSet]);
+
+  // Get all unique groups in selected group set
+  const allGroups = useMemo(() => {
+    if (!groupData || !selectedGroupSet) return [];
+    const groups = new Set();
+    Object.values(groupData).forEach(s => {
+      if (s[selectedGroupSet]) groups.add(s[selectedGroupSet]);
+    });
+    return Array.from(groups).sort();
+  }, [groupData, selectedGroupSet]);
 
   const handleFileUpload = useCallback(async (event) => {
     const file = event.target.files?.[0];
@@ -31,39 +114,57 @@ export default function App() {
 
   const exportStudentScores = useCallback(() => {
     if (!data) return;
-    const rows = Object.values(data.students).map((s, i) => ({
-      'ลำดับ': i + 1,
-      'รหัสนักศึกษา': s.studentId,
-      'ชื่อ-นามสกุล': s.fullName,
-      'จำนวน Grader ที่ Assign': s.gradersAssigned,
-      'จำนวน Grader ที่รีวิวแล้ว': s.gradersCompleted,
-      'คะแนนเฉลี่ย': s.workScore.average,
-      'คะแนนต่ำสุด': s.workScore.min || '-',
-      'คะแนนสูงสุด': s.workScore.max || '-',
-      'SD': s.workScore.stdDev,
-      'เชื่อถือได้': s.workScore.isReliable ? 'ใช่' : 'ไม่',
-      'Flags': s.flags.map(f => f.message).join('; ')
-    }));
+    const rows = Object.values(data.students).map((s, i) => {
+      const row = {
+        'ลำดับ': i + 1,
+        'รหัสนักศึกษา': s.studentId,
+        'ชื่อ-นามสกุล': s.fullName
+      };
+      // เพิ่ม group ถ้ามี
+      if (selectedGroupSet) {
+        row['Group'] = getStudentGroup(s.studentId);
+      }
+      return {
+        ...row,
+        'จำนวน Grader ที่ Assign': s.gradersAssigned,
+        'จำนวน Grader ที่รีวิวแล้ว': s.gradersCompleted,
+        'คะแนนเฉลี่ย': s.workScore.average,
+        'คะแนนต่ำสุด': s.workScore.min || '-',
+        'คะแนนสูงสุด': s.workScore.max || '-',
+        'SD': s.workScore.stdDev,
+        'เชื่อถือได้': s.workScore.isReliable ? 'ใช่' : 'ไม่',
+        'Flags': s.flags.map(f => f.message).join('; ')
+      };
+    });
     downloadCSV(rows, 'student-work-scores');
-  }, [data]);
+  }, [data, selectedGroupSet, getStudentGroup]);
 
   const exportGraderScores = useCallback(() => {
     if (!data) return;
-    const rows = Object.values(data.graders).map((g, i) => ({
-      'ลำดับ': i + 1,
-      'รหัสนักศึกษา': g.graderId,
-      'ชื่อ-นามสกุล': g.fullName,
-      'งานที่ได้รับ': g.assignedReviews,
-      'งานที่รีวิวแล้ว': g.peerReviewScore.reviewedCount,
-      'งานสมบูรณ์': g.peerReviewScore.completeCount,
-      'คะแนนพื้นฐาน': g.peerReviewScore.baseScore,
-      'โบนัส': g.peerReviewScore.bonus,
-      'คะแนนรวม': g.peerReviewScore.netScore,
-      'คะแนนเต็ม': g.peerReviewScore.fullScore,
-      'Flags': g.flags.map(f => f.message).join('; ')
-    }));
+    const rows = Object.values(data.graders).map((g, i) => {
+      const row = {
+        'ลำดับ': i + 1,
+        'รหัสนักศึกษา': g.graderId,
+        'ชื่อ-นามสกุล': g.fullName
+      };
+      // เพิ่ม group ถ้ามี
+      if (selectedGroupSet) {
+        row['Group'] = getStudentGroup(g.graderId);
+      }
+      return {
+        ...row,
+        'งานที่ได้รับ': g.assignedReviews,
+        'งานที่รีวิวแล้ว': g.peerReviewScore.reviewedCount,
+        'งานสมบูรณ์': g.peerReviewScore.completeCount,
+        'คะแนนพื้นฐาน': g.peerReviewScore.baseScore,
+        'โบนัส': g.peerReviewScore.bonus,
+        'คะแนนรวม': g.peerReviewScore.netScore,
+        'คะแนนเต็ม': g.peerReviewScore.fullScore,
+        'Flags': g.flags.map(f => f.message).join('; ')
+      };
+    });
     downloadCSV(rows, 'grader-peer-review-scores');
-  }, [data]);
+  }, [data, selectedGroupSet, getStudentGroup]);
 
   // Export รวมทั้งสองคะแนน
   const exportCombinedScores = useCallback(() => {
@@ -147,32 +248,41 @@ export default function App() {
     // สร้าง rows สำหรับ export
     const rows = Object.values(combined)
       .sort((a, b) => a.studentId.localeCompare(b.studentId))
-      .map((c, i) => ({
-        'ลำดับ': i + 1,
-        'รหัสนักศึกษา': c.studentId,
-        'ชื่อ-นามสกุล': c.fullName,
-        // คะแนนชิ้นงาน
-        '[ชิ้นงาน] Grader Assigned': c.work_gradersAssigned,
-        '[ชิ้นงาน] Grader รีวิวแล้ว': c.work_gradersCompleted,
-        '[ชิ้นงาน] คะแนนเฉลี่ย': c.work_average,
-        '[ชิ้นงาน] Min': c.work_min,
-        '[ชิ้นงาน] Max': c.work_max,
-        '[ชิ้นงาน] SD': c.work_sd,
-        '[ชิ้นงาน] เชื่อถือได้': c.work_reliable,
-        // คะแนน Peer Review
-        '[PR] งานที่ได้รับ': c.pr_assigned,
-        '[PR] รีวิวแล้ว': c.pr_reviewed,
-        '[PR] งานสมบูรณ์': c.pr_complete,
-        '[PR] คะแนนพื้นฐาน': c.pr_base,
-        '[PR] โบนัส': c.pr_bonus,
-        '[PR] คะแนนรวม': c.pr_netScore,
-        '[PR] คะแนนเต็ม': c.pr_fullScore,
-        // Flags
-        'หมายเหตุ': c.flags.join('; ')
-      }));
+      .map((c, i) => {
+        const row = {
+          'ลำดับ': i + 1,
+          'รหัสนักศึกษา': c.studentId,
+          'ชื่อ-นามสกุล': c.fullName
+        };
+        // เพิ่ม group ถ้ามี
+        if (selectedGroupSet) {
+          row['Group'] = getStudentGroup(c.studentId);
+        }
+        return {
+          ...row,
+          // คะแนนชิ้นงาน
+          '[ชิ้นงาน] Grader Assigned': c.work_gradersAssigned,
+          '[ชิ้นงาน] Grader รีวิวแล้ว': c.work_gradersCompleted,
+          '[ชิ้นงาน] คะแนนเฉลี่ย': c.work_average,
+          '[ชิ้นงาน] Min': c.work_min,
+          '[ชิ้นงาน] Max': c.work_max,
+          '[ชิ้นงาน] SD': c.work_sd,
+          '[ชิ้นงาน] เชื่อถือได้': c.work_reliable,
+          // คะแนน Peer Review
+          '[PR] งานที่ได้รับ': c.pr_assigned,
+          '[PR] รีวิวแล้ว': c.pr_reviewed,
+          '[PR] งานสมบูรณ์': c.pr_complete,
+          '[PR] คะแนนพื้นฐาน': c.pr_base,
+          '[PR] โบนัส': c.pr_bonus,
+          '[PR] คะแนนรวม': c.pr_netScore,
+          '[PR] คะแนนเต็ม': c.pr_fullScore,
+          // Flags
+          'หมายเหตุ': c.flags.join('; ')
+        };
+      });
     
     downloadCSV(rows, 'combined-scores');
-  }, [data]);
+  }, [data, selectedGroupSet, getStudentGroup]);
 
   const downloadCSV = (rows, filename) => {
     if (rows.length === 0) return;
@@ -191,20 +301,82 @@ export default function App() {
     if (!data) return [];
     return Object.values(data.students).filter(s => {
       const q = searchQuery.toLowerCase();
-      return s.studentName.toLowerCase().includes(q) || s.studentId.includes(q) || s.fullName.toLowerCase().includes(q);
+      const matchSearch = s.studentName.toLowerCase().includes(q) || s.studentId.includes(q) || s.fullName.toLowerCase().includes(q);
+      // ถ้ามี group filter ในหน้า students ก็ใช้ได้
+      const group = getStudentGroup(s.studentId);
+      const matchGroup = !groupFilter || group === groupFilter;
+      return matchSearch && matchGroup;
     }).sort((a, b) => b.workScore.average - a.workScore.average);
-  }, [data, searchQuery]);
+  }, [data, searchQuery, groupFilter, getStudentGroup]);
 
   const filteredGraders = useMemo(() => {
     if (!data) return [];
     return Object.values(data.graders).filter(g => {
       const q = searchQuery.toLowerCase();
-      return g.graderName.toLowerCase().includes(q) || g.graderId?.includes(q) || g.fullName.toLowerCase().includes(q);
+      const matchSearch = g.graderName.toLowerCase().includes(q) || g.graderId?.includes(q) || g.fullName.toLowerCase().includes(q);
+      const group = getStudentGroup(g.graderId);
+      const matchGroup = !groupFilter || group === groupFilter;
+      return matchSearch && matchGroup;
     }).sort((a, b) => b.peerReviewScore.netScore - a.peerReviewScore.netScore);
-  }, [data, searchQuery]);
+  }, [data, searchQuery, groupFilter, getStudentGroup]);
 
   const flaggedStudents = useMemo(() => data ? getFlaggedStudents(data.students) : [], [data]);
   const flaggedGraders = useMemo(() => data ? getFlaggedGraders(data.graders) : [], [data]);
+
+  // Group statistics
+  const groupStats = useMemo(() => {
+    if (!data || !selectedGroupSet || !groupData) return null;
+    
+    const stats = {};
+    allGroups.forEach(group => {
+      stats[group] = {
+        students: [],
+        graders: [],
+        workScores: [],
+        prScores: [],
+        flaggedCount: 0
+      };
+    });
+    
+    // Add students to groups
+    Object.values(data.students).forEach(s => {
+      const group = getStudentGroup(s.studentId);
+      if (group && stats[group]) {
+        stats[group].students.push(s);
+        if (s.workScore.average) {
+          stats[group].workScores.push(s.workScore.average);
+        }
+        if (s.flags.length > 0) {
+          stats[group].flaggedCount++;
+        }
+      }
+    });
+    
+    // Add graders to groups
+    Object.values(data.graders).forEach(g => {
+      const group = getStudentGroup(g.graderId);
+      if (group && stats[group]) {
+        stats[group].graders.push(g);
+        stats[group].prScores.push(g.peerReviewScore.netScore);
+        if (g.flags.length > 0) {
+          stats[group].flaggedCount++;
+        }
+      }
+    });
+    
+    // Calculate averages
+    Object.keys(stats).forEach(group => {
+      const s = stats[group];
+      s.avgWorkScore = s.workScores.length > 0 
+        ? Math.round(s.workScores.reduce((a, b) => a + b, 0) / s.workScores.length * 100) / 100 
+        : 0;
+      s.avgPRScore = s.prScores.length > 0 
+        ? Math.round(s.prScores.reduce((a, b) => a + b, 0) / s.prScores.length * 100) / 100 
+        : 0;
+    });
+    
+    return stats;
+  }, [data, selectedGroupSet, groupData, allGroups, getStudentGroup]);
 
   return (
     <div className="min-h-screen bg-slate-950 text-white">
@@ -221,19 +393,52 @@ export default function App() {
 
       <div className="max-w-7xl mx-auto px-4 py-6">
         {!data && !loading && (
-          <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-8 text-center">
-            <div className="max-w-md mx-auto">
-              <div className="w-16 h-16 bg-gradient-to-br from-cyan-500 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                <Upload className="w-8 h-8" />
-              </div>
-              <h2 className="text-xl font-semibold mb-2">อัปโหลดไฟล์ CSV</h2>
-              <p className="text-slate-400 mb-6">นำเข้าข้อมูล Peer Review จาก Canvas</p>
-              <label className="cursor-pointer">
-                <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
-                <div className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-purple-600 rounded-xl font-medium hover:opacity-90 transition inline-flex items-center gap-2">
-                  <Upload className="w-5 h-5" /> เลือกไฟล์ CSV
+          <div className="space-y-6">
+            {/* Upload Peer Review CSV */}
+            <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-8 text-center">
+              <div className="max-w-md mx-auto">
+                <div className="w-16 h-16 bg-gradient-to-br from-cyan-500 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <Upload className="w-8 h-8" />
                 </div>
-              </label>
+                <h2 className="text-xl font-semibold mb-2">1. อัปโหลดไฟล์ Peer Review CSV</h2>
+                <p className="text-slate-400 mb-6">นำเข้าข้อมูล Peer Review จาก Canvas</p>
+                <label className="cursor-pointer">
+                  <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
+                  <div className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-purple-600 rounded-xl font-medium hover:opacity-90 transition inline-flex items-center gap-2">
+                    <Upload className="w-5 h-5" /> เลือกไฟล์ Peer Review CSV
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {/* Upload Group CSV (Optional) */}
+            <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-8 text-center">
+              <div className="max-w-md mx-auto">
+                <div className="w-16 h-16 bg-gradient-to-br from-green-500 to-teal-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <Users className="w-8 h-8" />
+                </div>
+                <h2 className="text-xl font-semibold mb-2">2. อัปโหลดไฟล์ข้อมูลนักศึกษา (ไม่บังคับ)</h2>
+                <p className="text-slate-400 mb-4">นำเข้าข้อมูล Group จาก Canvas เพื่อดูสรุปแยกตาม Group</p>
+                <label className="cursor-pointer">
+                  <input type="file" accept=".csv" onChange={handleGroupFileUpload} className="hidden" />
+                  <div className="px-6 py-3 bg-gradient-to-r from-green-500 to-teal-600 rounded-xl font-medium hover:opacity-90 transition inline-flex items-center gap-2">
+                    <Users className="w-5 h-5" /> เลือกไฟล์ข้อมูลนักศึกษา
+                  </div>
+                </label>
+                {groupData && (
+                  <div className="mt-4 p-3 bg-green-900/30 border border-green-500/30 rounded-lg text-left">
+                    <div className="text-green-400 font-medium">✓ โหลดข้อมูล Group แล้ว</div>
+                    <div className="text-sm text-slate-400 mt-1">
+                      {Object.keys(groupData).length} นักศึกษา, {groupSets.length} Group Set(s)
+                    </div>
+                    {groupSets.length > 0 && (
+                      <div className="mt-2 text-sm text-slate-400">
+                        Group Sets: {groupSets.join(', ')}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -255,6 +460,81 @@ export default function App() {
 
         {data && !loading && (
           <>
+            {/* Group Management Bar */}
+            {(groupSets.length > 1 || groupData) && (
+              <div className="bg-slate-900/50 border border-white/10 rounded-xl p-4 mb-6">
+                <div className="flex flex-wrap items-center gap-4">
+                  {/* Group file upload (ถ้ายังไม่มี) */}
+                  {!groupData && (
+                    <label className="cursor-pointer">
+                      <input type="file" accept=".csv" onChange={handleGroupFileUpload} className="hidden" />
+                      <div className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm flex items-center gap-2">
+                        <Users className="w-4 h-4" /> อัปโหลดไฟล์ Group
+                      </div>
+                    </label>
+                  )}
+                  
+                  {/* Group Set Selector */}
+                  {groupSets.length > 1 && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-400 text-sm">Group Set:</span>
+                      <select
+                        value={selectedGroupSet}
+                        onChange={(e) => {
+                          setSelectedGroupSet(e.target.value);
+                          setGroupFilter(''); // Reset filter
+                        }}
+                        className="bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-sm"
+                      >
+                        <option value="">-- เลือก Group Set --</option>
+                        {groupSets.map(gs => (
+                          <option key={gs} value={gs}>{gs}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  
+                  {/* Group Filter */}
+                  {selectedGroupSet && allGroups.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <Filter className="w-4 h-4 text-slate-400" />
+                      <select
+                        value={groupFilter}
+                        onChange={(e) => setGroupFilter(e.target.value)}
+                        className="bg-slate-800 border border-white/10 rounded-lg px-3 py-2 text-sm"
+                      >
+                        <option value="">ทุก Group</option>
+                        {allGroups.map(g => (
+                          <option key={g} value={g}>{g}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  
+                  {/* Group Info */}
+                  {groupData && (
+                    <div className="text-sm text-slate-400 ml-auto">
+                      ✓ โหลด Group แล้ว ({Object.keys(groupData).length} คน)
+                      {selectedGroupSet && ` | ${selectedGroupSet}: ${allGroups.length} groups`}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            
+            {/* Upload Group File ถ้ายังไม่มี */}
+            {!groupData && (
+              <div className="bg-slate-900/50 border border-dashed border-white/20 rounded-xl p-4 mb-6 text-center">
+                <label className="cursor-pointer">
+                  <input type="file" accept=".csv" onChange={handleGroupFileUpload} className="hidden" />
+                  <div className="text-slate-400 text-sm flex items-center justify-center gap-2 hover:text-white transition">
+                    <Users className="w-4 h-4" /> 
+                    คลิกเพื่ออัปโหลดไฟล์ข้อมูลนักศึกษา (Group) - ไม่บังคับ
+                  </div>
+                </label>
+              </div>
+            )}
+
             <div className="flex gap-2 mb-6 bg-slate-900/50 p-1 rounded-xl border border-white/10 overflow-x-auto">
               {[
                 { id: 'overview', label: 'ภาพรวม', icon: BarChart2 },
@@ -281,7 +561,15 @@ export default function App() {
               ))}
             </div>
 
-            {activeTab === 'overview' && <OverviewTab data={data} onExportCombined={exportCombinedScores} />}
+            {activeTab === 'overview' && (
+              <OverviewTab 
+                data={data} 
+                onExportCombined={exportCombinedScores}
+                groupStats={groupStats}
+                selectedGroupSet={selectedGroupSet}
+                allGroups={allGroups}
+              />
+            )}
             {activeTab === 'students' && (
               <StudentsTab 
                 students={filteredStudents} 
@@ -289,6 +577,11 @@ export default function App() {
                 setSearchQuery={setSearchQuery}
                 onSelect={setSelectedStudent}
                 onExport={exportStudentScores}
+                getStudentGroup={getStudentGroup}
+                selectedGroupSet={selectedGroupSet}
+                allGroups={allGroups}
+                groupFilter={groupFilter}
+                setGroupFilter={setGroupFilter}
               />
             )}
             {activeTab === 'graders' && (
@@ -298,6 +591,11 @@ export default function App() {
                 setSearchQuery={setSearchQuery}
                 onSelect={setSelectedGrader}
                 onExport={exportGraderScores}
+                getStudentGroup={getStudentGroup}
+                selectedGroupSet={selectedGroupSet}
+                allGroups={allGroups}
+                groupFilter={groupFilter}
+                setGroupFilter={setGroupFilter}
               />
             )}
             {activeTab === 'admin' && (
@@ -305,6 +603,11 @@ export default function App() {
                 flaggedStudents={flaggedStudents}
                 flaggedGraders={flaggedGraders}
                 data={data}
+                getStudentGroup={getStudentGroup}
+                selectedGroupSet={selectedGroupSet}
+                allGroups={allGroups}
+                groupFilter={groupFilter}
+                setGroupFilter={setGroupFilter}
               />
             )}
           </>
@@ -321,7 +624,7 @@ export default function App() {
   );
 }
 
-function OverviewTab({ data, onExportCombined }) {
+function OverviewTab({ data, onExportCombined, groupStats, selectedGroupSet, allGroups }) {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -357,6 +660,57 @@ function OverviewTab({ data, onExportCombined }) {
           <PeerReviewStats graders={data.graders} stats={data.stats} />
         </div>
       </div>
+
+      {/* Group Statistics */}
+      {groupStats && selectedGroupSet && allGroups.length > 0 && (
+        <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6">
+          <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
+            <Users className="w-5 h-5 text-green-400" /> สถิติแยกตาม Group ({selectedGroupSet})
+          </h3>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-slate-800/50">
+                <tr>
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">Group</th>
+                  <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">จำนวนคน</th>
+                  <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนนชิ้นงานเฉลี่ย</th>
+                  <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนน PR เฉลี่ย</th>
+                  <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">มี Flags</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {allGroups.map(group => {
+                  const stats = groupStats[group];
+                  if (!stats) return null;
+                  return (
+                    <tr key={group} className="hover:bg-white/5">
+                      <td className="px-4 py-3 font-medium">{group}</td>
+                      <td className="px-4 py-3 text-center text-slate-400">{stats.students.length}</td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`font-semibold ${stats.avgWorkScore >= 9 ? 'text-green-400' : stats.avgWorkScore >= 6 ? 'text-yellow-400' : 'text-red-400'}`}>
+                          {stats.avgWorkScore.toFixed(2)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className={`font-semibold ${stats.avgPRScore >= 3.5 ? 'text-green-400' : stats.avgPRScore >= 2.5 ? 'text-yellow-400' : 'text-red-400'}`}>
+                          {stats.avgPRScore.toFixed(2)}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {stats.flaggedCount > 0 ? (
+                          <span className="text-yellow-400">{stats.flaggedCount}</span>
+                        ) : (
+                          <span className="text-green-400">0</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -431,11 +785,11 @@ function PeerReviewStats({ graders, stats }) {
   );
 }
 
-function StudentsTab({ students, searchQuery, setSearchQuery, onSelect, onExport }) {
+function StudentsTab({ students, searchQuery, setSearchQuery, onSelect, onExport, getStudentGroup, selectedGroupSet, allGroups, groupFilter, setGroupFilter }) {
   return (
     <div className="space-y-4">
-      <div className="flex gap-4 items-center">
-        <div className="relative flex-1">
+      <div className="flex gap-4 items-center flex-wrap">
+        <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
           <input
             type="text"
@@ -445,6 +799,21 @@ function StudentsTab({ students, searchQuery, setSearchQuery, onSelect, onExport
             className="w-full pl-12 pr-4 py-3 bg-slate-900/50 border border-white/10 rounded-xl text-white placeholder-slate-500"
           />
         </div>
+        {selectedGroupSet && allGroups.length > 0 && (
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-slate-400" />
+            <select
+              value={groupFilter}
+              onChange={(e) => setGroupFilter(e.target.value)}
+              className="bg-slate-800 border border-white/10 rounded-lg px-3 py-2"
+            >
+              <option value="">ทุก Group</option>
+              {allGroups.map(g => (
+                <option key={g} value={g}>{g}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <button onClick={onExport} className="flex items-center gap-2 px-4 py-3 bg-green-600 hover:bg-green-500 rounded-xl">
           <Download className="w-5 h-5" /> Export
         </button>
@@ -457,6 +826,9 @@ function StudentsTab({ students, searchQuery, setSearchQuery, onSelect, onExport
               <tr>
                 <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">รหัส</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">ชื่อ-นามสกุล</th>
+                {selectedGroupSet && (
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">Group</th>
+                )}
                 <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">Graders</th>
                 <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนนเฉลี่ย</th>
                 <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">Min-Max</th>
@@ -473,6 +845,13 @@ function StudentsTab({ students, searchQuery, setSearchQuery, onSelect, onExport
                     {student.fullName}
                     {student.flags.length > 0 && <AlertTriangle className="inline w-4 h-4 text-yellow-400 ml-2" />}
                   </td>
+                  {selectedGroupSet && (
+                    <td className="px-4 py-3 text-sm">
+                      <span className="bg-slate-700 px-2 py-1 rounded text-xs">
+                        {getStudentGroup(student.studentId) || '-'}
+                      </span>
+                    </td>
+                  )}
                   <td className="px-4 py-3 text-center">
                     <span className="text-cyan-400">{student.gradersCompleted}</span>
                     <span className="text-slate-500">/{student.gradersAssigned}</span>
@@ -511,11 +890,11 @@ function StudentsTab({ students, searchQuery, setSearchQuery, onSelect, onExport
   );
 }
 
-function GradersTab({ graders, searchQuery, setSearchQuery, onSelect, onExport }) {
+function GradersTab({ graders, searchQuery, setSearchQuery, onSelect, onExport, getStudentGroup, selectedGroupSet, allGroups, groupFilter, setGroupFilter }) {
   return (
     <div className="space-y-4">
-      <div className="flex gap-4 items-center">
-        <div className="relative flex-1">
+      <div className="flex gap-4 items-center flex-wrap">
+        <div className="relative flex-1 min-w-[200px]">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
           <input
             type="text"
@@ -525,6 +904,21 @@ function GradersTab({ graders, searchQuery, setSearchQuery, onSelect, onExport }
             className="w-full pl-12 pr-4 py-3 bg-slate-900/50 border border-white/10 rounded-xl text-white placeholder-slate-500"
           />
         </div>
+        {selectedGroupSet && allGroups.length > 0 && (
+          <div className="flex items-center gap-2">
+            <Filter className="w-4 h-4 text-slate-400" />
+            <select
+              value={groupFilter}
+              onChange={(e) => setGroupFilter(e.target.value)}
+              className="bg-slate-800 border border-white/10 rounded-lg px-3 py-2"
+            >
+              <option value="">ทุก Group</option>
+              {allGroups.map(g => (
+                <option key={g} value={g}>{g}</option>
+              ))}
+            </select>
+          </div>
+        )}
         <button onClick={onExport} className="flex items-center gap-2 px-4 py-3 bg-green-600 hover:bg-green-500 rounded-xl">
           <Download className="w-5 h-5" /> Export
         </button>
@@ -545,6 +939,9 @@ function GradersTab({ graders, searchQuery, setSearchQuery, onSelect, onExport }
               <tr>
                 <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">รหัส</th>
                 <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">ชื่อ-นามสกุล</th>
+                {selectedGroupSet && (
+                  <th className="px-4 py-3 text-left text-sm font-medium text-slate-400">Group</th>
+                )}
                 <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">งานที่ได้รับ</th>
                 <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">รีวิวแล้ว</th>
                 <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">งานสมบูรณ์</th>
@@ -564,6 +961,13 @@ function GradersTab({ graders, searchQuery, setSearchQuery, onSelect, onExport }
                       {grader.fullName}
                       {grader.flags.length > 0 && <AlertTriangle className="inline w-4 h-4 text-yellow-400 ml-2" />}
                     </td>
+                    {selectedGroupSet && (
+                      <td className="px-4 py-3 text-sm">
+                        <span className="bg-slate-700 px-2 py-1 rounded text-xs">
+                          {getStudentGroup(grader.graderId) || '-'}
+                        </span>
+                      </td>
+                    )}
                     <td className="px-4 py-3 text-center">
                       <span className={grader.assignedReviews !== 3 ? 'text-yellow-400' : 'text-slate-400'}>
                         {grader.assignedReviews}
@@ -608,7 +1012,7 @@ function GradersTab({ graders, searchQuery, setSearchQuery, onSelect, onExport }
   );
 }
 
-function AdminTab({ flaggedStudents, flaggedGraders, data }) {
+function AdminTab({ flaggedStudents, flaggedGraders, data, getStudentGroup, selectedGroupSet, allGroups, groupFilter, setGroupFilter }) {
   const [activeSection, setActiveSection] = useState('overmax'); // overmax, unusual, flagged, inconsistent
 
   // กรณีคะแนนเกิน 12
@@ -616,16 +1020,24 @@ function AdminTab({ flaggedStudents, flaggedGraders, data }) {
     if (!data) return { students: [], graders: [] };
     
     // Students ที่ได้รับคะแนนเกิน 12
-    const studentsOver = Object.values(data.students)
+    let studentsOver = Object.values(data.students)
       .filter(s => s.workScore.grades && s.workScore.grades.some(g => g > 12))
       .map(s => ({
         ...s,
         overGrades: s.workScore.grades.filter(g => g > 12)
       }));
     
+    // Apply group filter
+    if (groupFilter) {
+      studentsOver = studentsOver.filter(s => getStudentGroup(s.studentId) === groupFilter);
+    }
+    
     // Graders ที่ให้คะแนนเกิน 12
-    const gradersOver = [];
+    let gradersOver = [];
     Object.values(data.graders).forEach(g => {
+      // Apply group filter
+      if (groupFilter && getStudentGroup(g.graderId) !== groupFilter) return;
+      
       g.peerReviewScore.details.forEach(d => {
         if (d.gradeGiven > 12) {
           gradersOver.push({
@@ -639,15 +1051,21 @@ function AdminTab({ flaggedStudents, flaggedGraders, data }) {
     });
     
     return { students: studentsOver, graders: gradersOver };
-  }, [data]);
+  }, [data, groupFilter, getStudentGroup]);
 
   // กรณีพิเศษ: ได้รับงานไม่เท่ากับ 3
   const unusualAssignments = useMemo(() => {
     if (!data) return [];
-    return Object.values(data.graders)
-      .filter(g => g.assignedReviews !== 3 && g.assignedReviews > 0)
-      .sort((a, b) => a.assignedReviews - b.assignedReviews);
-  }, [data]);
+    let result = Object.values(data.graders)
+      .filter(g => g.assignedReviews !== 3 && g.assignedReviews > 0);
+    
+    // Apply group filter
+    if (groupFilter) {
+      result = result.filter(g => getStudentGroup(g.graderId) === groupFilter);
+    }
+    
+    return result.sort((a, b) => a.assignedReviews - b.assignedReviews);
+  }, [data, groupFilter, getStudentGroup]);
 
   // กรณี G: คะแนนไม่สอดคล้องกับคอมเมนต์
   const inconsistentReviews = useMemo(() => {
@@ -655,6 +1073,9 @@ function AdminTab({ flaggedStudents, flaggedGraders, data }) {
     const results = [];
     
     Object.values(data.graders).forEach(grader => {
+      // Apply group filter
+      if (groupFilter && getStudentGroup(grader.graderId) !== groupFilter) return;
+      
       grader.peerReviewScore.details.forEach(detail => {
         const review = data.reviews.find(r => r.id === detail.reviewId);
         if (!review) return;
@@ -699,12 +1120,44 @@ function AdminTab({ flaggedStudents, flaggedGraders, data }) {
     });
     
     return results;
-  }, [data]);
+  }, [data, groupFilter, getStudentGroup]);
+
+  // Filter flagged lists by group
+  const filteredFlaggedStudents = useMemo(() => {
+    if (!groupFilter) return flaggedStudents;
+    return flaggedStudents.filter(s => getStudentGroup(s.studentId) === groupFilter);
+  }, [flaggedStudents, groupFilter, getStudentGroup]);
+
+  const filteredFlaggedGraders = useMemo(() => {
+    if (!groupFilter) return flaggedGraders;
+    return flaggedGraders.filter(g => getStudentGroup(g.graderId) === groupFilter);
+  }, [flaggedGraders, groupFilter, getStudentGroup]);
 
   const totalOverMax = overMaxScores.students.length + overMaxScores.graders.length;
 
   return (
     <div className="space-y-6">
+      {/* Group Filter */}
+      {selectedGroupSet && allGroups.length > 0 && (
+        <div className="bg-slate-900/50 border border-white/10 rounded-xl p-4 flex items-center gap-4">
+          <Filter className="w-5 h-5 text-slate-400" />
+          <span className="text-slate-400">กรองตาม Group:</span>
+          <select
+            value={groupFilter}
+            onChange={(e) => setGroupFilter(e.target.value)}
+            className="bg-slate-800 border border-white/10 rounded-lg px-4 py-2"
+          >
+            <option value="">ทุก Group</option>
+            {allGroups.map(g => (
+              <option key={g} value={g}>{g}</option>
+            ))}
+          </select>
+          {groupFilter && (
+            <span className="text-green-400 text-sm">กำลังแสดงเฉพาะ: {groupFilter}</span>
+          )}
+        </div>
+      )}
+
       {/* Section Tabs */}
       <div className="flex gap-2 bg-slate-800/50 p-1 rounded-xl flex-wrap">
         <button
@@ -723,7 +1176,7 @@ function AdminTab({ flaggedStudents, flaggedGraders, data }) {
           onClick={() => setActiveSection('flagged')}
           className={`flex-1 px-4 py-2 rounded-lg transition ${activeSection === 'flagged' ? 'bg-orange-600 text-white' : 'text-slate-400 hover:text-white'}`}
         >
-          🚨 รายการผิดปกติ ({flaggedStudents.length + flaggedGraders.length})
+          🚨 รายการผิดปกติ ({filteredFlaggedStudents.length + filteredFlaggedGraders.length})
         </button>
         <button
           onClick={() => setActiveSection('inconsistent')}
@@ -884,16 +1337,21 @@ function AdminTab({ flaggedStudents, flaggedGraders, data }) {
           <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6">
             <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
               <AlertTriangle className="w-5 h-5 text-yellow-400" />
-              นักศึกษาที่ต้องตรวจสอบ ({flaggedStudents.length})
+              นักศึกษาที่ต้องตรวจสอบ ({filteredFlaggedStudents.length})
             </h3>
-            {flaggedStudents.length === 0 ? (
+            {filteredFlaggedStudents.length === 0 ? (
               <p className="text-slate-400">ไม่มีรายการ</p>
             ) : (
               <div className="space-y-3 max-h-96 overflow-y-auto">
-                {flaggedStudents.map(s => (
+                {filteredFlaggedStudents.map(s => (
                   <div key={s.studentName} className="bg-slate-800/50 rounded-lg p-3">
                     <div className="font-medium">{s.fullName}</div>
                     <div className="text-sm text-slate-400 font-mono">{s.studentId}</div>
+                    {selectedGroupSet && (
+                      <div className="text-xs text-green-400 mt-1">
+                        Group: {getStudentGroup(s.studentId) || '-'}
+                      </div>
+                    )}
                     <div className="mt-2 space-y-1">
                       {s.flags.map((f, i) => (
                         <div key={i} className={`text-sm px-2 py-1 rounded ${
@@ -914,16 +1372,21 @@ function AdminTab({ flaggedStudents, flaggedGraders, data }) {
           <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6">
             <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
               <AlertTriangle className="w-5 h-5 text-yellow-400" />
-              Graders ที่ต้องตรวจสอบ ({flaggedGraders.length})
+              Graders ที่ต้องตรวจสอบ ({filteredFlaggedGraders.length})
             </h3>
-            {flaggedGraders.length === 0 ? (
+            {filteredFlaggedGraders.length === 0 ? (
               <p className="text-slate-400">ไม่มีรายการ</p>
             ) : (
               <div className="space-y-3 max-h-96 overflow-y-auto">
-                {flaggedGraders.map(g => (
+                {filteredFlaggedGraders.map(g => (
                   <div key={g.graderName} className="bg-slate-800/50 rounded-lg p-3">
                     <div className="font-medium">{g.fullName}</div>
                     <div className="text-sm text-slate-400 font-mono">{g.graderId}</div>
+                    {selectedGroupSet && (
+                      <div className="text-xs text-green-400 mt-1">
+                        Group: {getStudentGroup(g.graderId) || '-'}
+                      </div>
+                    )}
                     <div className="mt-2 space-y-1">
                       {g.flags.map((f, i) => (
                         <div key={i} className={`text-sm px-2 py-1 rounded ${
