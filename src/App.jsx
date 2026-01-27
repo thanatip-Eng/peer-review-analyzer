@@ -396,12 +396,43 @@ export default function App() {
           <div className="space-y-6">
             {/* Upload Peer Review CSV */}
             <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-8 text-center">
-              <div className="max-w-md mx-auto">
+              <div className="max-w-lg mx-auto">
                 <div className="w-16 h-16 bg-gradient-to-br from-cyan-500 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <Upload className="w-8 h-8" />
                 </div>
                 <h2 className="text-xl font-semibold mb-2">1. อัปโหลดไฟล์ Peer Review CSV</h2>
-                <p className="text-slate-400 mb-6">นำเข้าข้อมูล Peer Review จาก Canvas</p>
+                <p className="text-slate-400 mb-4">นำเข้าข้อมูล Peer Review จาก Canvas</p>
+                
+                {/* Link to CMU Peer Review System */}
+                <div className="bg-purple-900/30 border border-purple-500/30 rounded-xl p-4 mb-6 text-left">
+                  <div className="flex items-start gap-3">
+                    <div className="text-2xl">🎓</div>
+                    <div>
+                      <div className="font-medium text-purple-200 mb-1">ระบบดึงคะแนน Peer Review ของ มช.</div>
+                      <p className="text-sm text-slate-400 mb-2">
+                        สำหรับอาจารย์และ TA มหาวิทยาลัยเชียงใหม่
+                      </p>
+                      <a 
+                        href="http://10.110.3.252:8000/" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 text-purple-400 hover:text-purple-300 text-sm font-medium"
+                      >
+                        🔗 เข้าสู่ระบบดึงคะแนน Peer Review
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                      </a>
+                      <div className="mt-2 flex items-center gap-2 text-xs text-yellow-400">
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                        </svg>
+                        <span>⚠️ ต้องใช้เครือข่าย มช. เท่านั้น (CMU Network / VPN)</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 <label className="cursor-pointer">
                   <input type="file" accept=".csv" onChange={handleFileUpload} className="hidden" />
                   <div className="px-6 py-3 bg-gradient-to-r from-cyan-500 to-purple-600 rounded-xl font-medium hover:opacity-90 transition inline-flex items-center gap-2">
@@ -413,12 +444,40 @@ export default function App() {
 
             {/* Upload Group CSV (Optional) */}
             <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-8 text-center">
-              <div className="max-w-md mx-auto">
+              <div className="max-w-lg mx-auto">
                 <div className="w-16 h-16 bg-gradient-to-br from-green-500 to-teal-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
                   <Users className="w-8 h-8" />
                 </div>
                 <h2 className="text-xl font-semibold mb-2">2. อัปโหลดไฟล์ข้อมูลนักศึกษา (ไม่บังคับ)</h2>
                 <p className="text-slate-400 mb-4">นำเข้าข้อมูล Group จาก Canvas เพื่อดูสรุปแยกตาม Group</p>
+                
+                {/* Link to Canvas Group Exporter */}
+                <div className="bg-slate-800/50 border border-white/10 rounded-xl p-4 mb-4 text-left">
+                  <div className="flex items-start gap-3">
+                    <div className="text-2xl">💡</div>
+                    <div>
+                      <div className="font-medium text-slate-200 mb-1">ยังไม่มีไฟล์ข้อมูลนักศึกษา?</div>
+                      <p className="text-sm text-slate-400 mb-2">
+                        สร้างไฟล์ข้อมูลนักศึกษาพร้อม Group ได้ที่เครื่องมือนี้:
+                      </p>
+                      <a 
+                        href="https://canvas-group-exporter.vercel.app/" 
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-2 text-cyan-400 hover:text-cyan-300 text-sm font-medium"
+                      >
+                        🔗 Canvas Student Exporter
+                        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                        </svg>
+                      </a>
+                      <p className="text-xs text-slate-500 mt-2">
+                        Export ข้อมูลจาก Canvas แล้วนำไฟล์ CSV มาอัปโหลดที่นี่
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
                 <label className="cursor-pointer">
                   <input type="file" accept=".csv" onChange={handleGroupFileUpload} className="hidden" />
                   <div className="px-6 py-3 bg-gradient-to-r from-green-500 to-teal-600 rounded-xl font-medium hover:opacity-90 transition inline-flex items-center gap-2">
@@ -524,14 +583,28 @@ export default function App() {
             
             {/* Upload Group File ถ้ายังไม่มี */}
             {!groupData && (
-              <div className="bg-slate-900/50 border border-dashed border-white/20 rounded-xl p-4 mb-6 text-center">
-                <label className="cursor-pointer">
-                  <input type="file" accept=".csv" onChange={handleGroupFileUpload} className="hidden" />
-                  <div className="text-slate-400 text-sm flex items-center justify-center gap-2 hover:text-white transition">
-                    <Users className="w-4 h-4" /> 
-                    คลิกเพื่ออัปโหลดไฟล์ข้อมูลนักศึกษา (Group) - ไม่บังคับ
-                  </div>
-                </label>
+              <div className="bg-slate-900/50 border border-dashed border-white/20 rounded-xl p-4 mb-6">
+                <div className="flex flex-wrap items-center justify-center gap-4">
+                  <label className="cursor-pointer">
+                    <input type="file" accept=".csv" onChange={handleGroupFileUpload} className="hidden" />
+                    <div className="text-slate-400 text-sm flex items-center gap-2 hover:text-white transition">
+                      <Users className="w-4 h-4" /> 
+                      คลิกเพื่ออัปโหลดไฟล์ข้อมูลนักศึกษา (Group) - ไม่บังคับ
+                    </div>
+                  </label>
+                  <span className="text-slate-600">|</span>
+                  <a 
+                    href="https://canvas-group-exporter.vercel.app/" 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="text-cyan-400 hover:text-cyan-300 text-sm flex items-center gap-1"
+                  >
+                    💡 สร้างไฟล์ Group ที่นี่
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                  </a>
+                </div>
               </div>
             )}
 
