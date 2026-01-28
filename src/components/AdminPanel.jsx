@@ -161,19 +161,47 @@ export default function AdminPanel({ onViewData }) {
     try {
       const result = await parseCSV(file);
       
-      // Save to Firestore
-      const dataRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', 'main');
-      await setDoc(dataRef, {
-        students: result.students,
-        graders: result.graders,
-        reviews: result.reviews,
+      // แบ่งข้อมูลออกเป็น chunks เพื่อหลีกเลี่ยง Firestore 1MB limit
+      const CHUNK_SIZE = 100; // จำนวน students/graders ต่อ chunk
+      
+      // 1. Save metadata และ stats
+      const metaRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', 'meta');
+      await setDoc(metaRef, {
         stats: result.stats,
         uploadedAt: serverTimestamp(),
         uploadedBy: currentUser.uid,
-        fileName: file.name
+        fileName: file.name,
+        totalStudents: Object.keys(result.students).length,
+        totalGraders: Object.keys(result.graders).length
       });
       
-      setUploadSuccess('อัปโหลดข้อมูล Peer Review สำเร็จ!');
+      // 2. Save students in chunks
+      const studentEntries = Object.entries(result.students);
+      for (let i = 0; i < studentEntries.length; i += CHUNK_SIZE) {
+        const chunk = studentEntries.slice(i, i + CHUNK_SIZE);
+        const chunkObj = Object.fromEntries(chunk);
+        const chunkRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', `students_${Math.floor(i/CHUNK_SIZE)}`);
+        await setDoc(chunkRef, { data: chunkObj, chunkIndex: Math.floor(i/CHUNK_SIZE) });
+      }
+      
+      // 3. Save graders in chunks
+      const graderEntries = Object.entries(result.graders);
+      for (let i = 0; i < graderEntries.length; i += CHUNK_SIZE) {
+        const chunk = graderEntries.slice(i, i + CHUNK_SIZE);
+        const chunkObj = Object.fromEntries(chunk);
+        const chunkRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', `graders_${Math.floor(i/CHUNK_SIZE)}`);
+        await setDoc(chunkRef, { data: chunkObj, chunkIndex: Math.floor(i/CHUNK_SIZE) });
+      }
+      
+      // 4. Save reviews in chunks (reviews อาจใหญ่มาก)
+      const reviewChunkSize = 200;
+      for (let i = 0; i < result.reviews.length; i += reviewChunkSize) {
+        const chunk = result.reviews.slice(i, i + reviewChunkSize);
+        const chunkRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', `reviews_${Math.floor(i/reviewChunkSize)}`);
+        await setDoc(chunkRef, { data: chunk, chunkIndex: Math.floor(i/reviewChunkSize) });
+      }
+      
+      setUploadSuccess(`อัปโหลดข้อมูล Peer Review สำเร็จ! (${Object.keys(result.students).length} นักศึกษา, ${Object.keys(result.graders).length} graders)`);
     } catch (error) {
       console.error('Upload error:', error);
       setUploadError(`เกิดข้อผิดพลาด: ${error.message}`);

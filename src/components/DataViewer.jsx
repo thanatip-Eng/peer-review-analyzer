@@ -34,15 +34,46 @@ export default function DataViewer({ semesterId, taAssignment }) {
       setError(null);
       
       try {
-        // Fetch peer review data
-        const peerReviewRef = doc(db, 'semesters', semesterId, 'peerReviewData', 'main');
-        const peerReviewSnap = await getDoc(peerReviewRef);
+        // Fetch metadata first
+        const metaRef = doc(db, 'semesters', semesterId, 'peerReviewData', 'meta');
+        const metaSnap = await getDoc(metaRef);
         
-        if (peerReviewSnap.exists()) {
-          setData(peerReviewSnap.data());
-        } else {
+        if (!metaSnap.exists()) {
           setError('ไม่พบข้อมูล Peer Review สำหรับเทอมนี้');
+          setLoading(false);
+          return;
         }
+        
+        const meta = metaSnap.data();
+        
+        // Fetch all chunks from peerReviewData subcollection
+        const peerReviewCol = collection(db, 'semesters', semesterId, 'peerReviewData');
+        const peerReviewSnap = await getDocs(peerReviewCol);
+        
+        // Reconstruct data from chunks
+        let students = {};
+        let graders = {};
+        let reviews = [];
+        
+        peerReviewSnap.docs.forEach(docSnap => {
+          const docId = docSnap.id;
+          const docData = docSnap.data();
+          
+          if (docId.startsWith('students_')) {
+            students = { ...students, ...docData.data };
+          } else if (docId.startsWith('graders_')) {
+            graders = { ...graders, ...docData.data };
+          } else if (docId.startsWith('reviews_')) {
+            reviews = [...reviews, ...docData.data];
+          }
+        });
+        
+        setData({
+          students,
+          graders,
+          reviews,
+          stats: meta.stats
+        });
         
         // Fetch student/group data
         const studentDataRef = doc(db, 'semesters', semesterId, 'studentData', 'main');
