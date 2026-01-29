@@ -661,6 +661,15 @@ export default function DataViewer({ semesterId, taAssignment }) {
             </div>
           )}
 
+          {/* Flag Legend */}
+          <div className="bg-slate-800/50 rounded-xl p-3 text-xs flex flex-wrap gap-x-6 gap-y-2">
+            <span className="text-slate-400 font-medium">ความหมาย Flag:</span>
+            <span><span className="text-red-400">🔴</span> คะแนนเกิน/ต่ำกว่าช่วง (0-12)</span>
+            <span><span className="text-yellow-400">🟡</span> SD สูง / คะแนนห่างกันมาก</span>
+            <span><span className="text-blue-400">🔵</span> grader น้อยกว่า 2 คน</span>
+            <span><span className="text-green-400">✓</span> น่าเชื่อถือ = grader≥2, SD&lt;3, คะแนนในช่วง 0-12</span>
+          </div>
+
           <div className="bg-slate-900/50 border border-white/10 rounded-2xl overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -689,8 +698,12 @@ export default function DataViewer({ semesterId, taAssignment }) {
                       <tr key={student.studentName} className="hover:bg-white/5">
                         <td className="px-4 py-3 font-mono text-sm">{student.studentId}</td>
                         <td className="px-4 py-3">
-                          {student.fullName}
-                          {student.flags.length > 0 && <AlertTriangle className="inline w-4 h-4 text-yellow-400 ml-2" />}
+                          <div className="flex items-center gap-2">
+                            <span>{student.fullName}</span>
+                            {student.flags.length > 0 && (
+                              <FlagTooltip flags={student.flags} />
+                            )}
+                          </div>
                         </td>
                         {selectedGroupSet && (
                           <td className="px-4 py-3 text-sm">
@@ -857,6 +870,14 @@ export default function DataViewer({ semesterId, taAssignment }) {
             <span>รีวิวครบ + ทุกงานสมบูรณ์ = <span className="text-green-400">+1 โบนัส</span></span>
           </div>
 
+          {/* Flag Legend */}
+          <div className="bg-slate-800/50 rounded-xl p-3 text-xs flex flex-wrap gap-x-6 gap-y-2">
+            <span className="text-slate-400 font-medium">ความหมาย Flag:</span>
+            <span><span className="text-yellow-400">🟡</span> รีวิวไม่ครบ / ไม่ได้โบนัส</span>
+            <span><span className="text-blue-400">🔵</span> ได้รับงานไม่ครบ 3 งาน</span>
+            <span><span className="text-slate-400">งานสมบูรณ์</span> = ขาด comment ไม่เกิน 3 ช่อง</span>
+          </div>
+
           <div className="bg-slate-900/50 border border-white/10 rounded-2xl overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -887,8 +908,12 @@ export default function DataViewer({ semesterId, taAssignment }) {
                       <tr key={grader.graderName} className="hover:bg-white/5">
                         <td className="px-4 py-3 font-mono text-sm">{grader.graderId}</td>
                         <td className="px-4 py-3">
-                          {grader.fullName}
-                          {grader.flags.length > 0 && <AlertTriangle className="inline w-4 h-4 text-yellow-400 ml-2" />}
+                          <div className="flex items-center gap-2">
+                            <span>{grader.fullName}</span>
+                            {grader.flags.length > 0 && (
+                              <FlagTooltip flags={grader.flags} />
+                            )}
+                          </div>
                         </td>
                         {selectedGroupSet && (
                           <td className="px-4 py-3 text-sm">
@@ -1123,6 +1148,61 @@ function StatCard({ label, value, icon: Icon, color }) {
       </div>
       <div className="text-3xl font-bold">{value}</div>
       <div className="text-sm text-slate-400 mt-1">{label}</div>
+    </div>
+  );
+}
+
+// FlagTooltip component - แสดง flag พร้อมคำอธิบาย
+function FlagTooltip({ flags }) {
+  const [isOpen, setIsOpen] = useState(false);
+  
+  const getSeverityColor = (severity) => {
+    switch (severity) {
+      case 'alert': return 'text-red-400 bg-red-900/30 border-red-500/30';
+      case 'warning': return 'text-yellow-400 bg-yellow-900/30 border-yellow-500/30';
+      case 'info': return 'text-blue-400 bg-blue-900/30 border-blue-500/30';
+      default: return 'text-slate-400 bg-slate-800 border-slate-600';
+    }
+  };
+  
+  const getSeverityIcon = (severity) => {
+    switch (severity) {
+      case 'alert': return '🔴';
+      case 'warning': return '🟡';
+      case 'info': return '🔵';
+      default: return '⚪';
+    }
+  };
+
+  return (
+    <div className="relative inline-block">
+      <button
+        onClick={() => setIsOpen(!isOpen)}
+        onMouseEnter={() => setIsOpen(true)}
+        onMouseLeave={() => setIsOpen(false)}
+        className="p-1 hover:bg-yellow-500/20 rounded transition"
+        title={flags.map(f => f.message).join('\n')}
+      >
+        <AlertTriangle className="w-4 h-4 text-yellow-400" />
+      </button>
+      
+      {isOpen && (
+        <div className="absolute z-50 left-0 top-full mt-1 w-72 bg-slate-900 border border-white/20 rounded-xl shadow-xl p-3 space-y-2">
+          <div className="text-xs font-medium text-slate-400 mb-2 flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-yellow-400" />
+            พบ {flags.length} รายการที่ต้องตรวจสอบ
+          </div>
+          {flags.map((flag, i) => (
+            <div 
+              key={i} 
+              className={`text-xs p-2 rounded-lg border ${getSeverityColor(flag.severity)}`}
+            >
+              <span className="mr-1">{getSeverityIcon(flag.severity)}</span>
+              {flag.message}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

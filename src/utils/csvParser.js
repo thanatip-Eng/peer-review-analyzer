@@ -287,6 +287,14 @@ function processCSVData(rawData, headers) {
       const avgSquaredDiff = squaredDiffs.reduce((a, b) => a + b, 0) / grades.length;
       const stdDev = Math.sqrt(avgSquaredDiff);
       
+      // เกณฑ์ความน่าเชื่อถือ:
+      // 1. มี grader อย่างน้อย 2 คน
+      // 2. SD ต้องไม่สูงเกินไป (< 3)
+      // 3. คะแนนต่ำสุดต้อง >= 0
+      // 4. คะแนนสูงสุดต้อง <= 12
+      const isScoreInValidRange = min >= 0 && max <= 12;
+      const isReliable = grades.length >= 2 && stdDev < 3 && isScoreInValidRange;
+      
       student.workScore = {
         average: Math.round(avg * 100) / 100,
         min, max,
@@ -294,7 +302,14 @@ function processCSVData(rawData, headers) {
         stdDev: Math.round(stdDev * 100) / 100,
         grades,
         graderCount: grades.length,
-        isReliable: grades.length >= 2 && stdDev < 3
+        isReliable,
+        // เหตุผลที่ไม่น่าเชื่อถือ (สำหรับ debug)
+        reliabilityIssues: !isReliable ? [
+          grades.length < 2 ? 'grader < 2' : null,
+          stdDev >= 3 ? `SD สูง (${stdDev.toFixed(2)})` : null,
+          min < 0 ? `คะแนนต่ำกว่า 0 (${min})` : null,
+          max > 12 ? `คะแนนเกิน 12 (${max})` : null
+        ].filter(Boolean) : []
       };
       
       // เพิ่ม flag สำหรับคะแนนเกิน 12
@@ -303,6 +318,16 @@ function processCSVData(rawData, headers) {
         student.flags.push({ 
           type: 'score_over_max', 
           message: `⚠️ มีคะแนนเกิน 12: ${overMaxGrades.join(', ')}`, 
+          severity: 'alert' 
+        });
+      }
+      
+      // เพิ่ม flag สำหรับคะแนนต่ำกว่า 0
+      const underMinGrades = grades.filter(g => g < 0);
+      if (underMinGrades.length > 0) {
+        student.flags.push({ 
+          type: 'score_under_min', 
+          message: `⚠️ มีคะแนนต่ำกว่า 0: ${underMinGrades.join(', ')}`, 
           severity: 'alert' 
         });
       }
