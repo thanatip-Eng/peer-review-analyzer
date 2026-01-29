@@ -54,7 +54,17 @@
 
 4. คลิก **"Save"**
 
-### Step 2.3: เพิ่ม Authorized Domain (สำหรับ Vercel)
+### Step 2.3: เปิด Email/Password Sign-In
+1. ไปที่ Tab **"Sign-in method"**
+2. คลิก **"Email/Password"** ในรายการ Sign-in providers
+3. ตั้งค่า:
+   ```
+   ☑ Enable (เปิด toggle ตัวแรก)
+   ☐ Email link (passwordless sign-in) - ไม่ต้องเปิด
+   ```
+4. คลิก **"Save"**
+
+### Step 2.4: เพิ่ม Authorized Domain (สำหรับ Vercel)
 1. ไปที่ Tab **"Settings"** → **"Authorized domains"**
 2. คลิก **"Add domain"**
 3. เพิ่ม domain ของ Vercel:

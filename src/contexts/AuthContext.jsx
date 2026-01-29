@@ -2,8 +2,12 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { 
   signInWithPopup, 
+  signInWithEmailAndPassword,
   signOut, 
-  onAuthStateChanged 
+  onAuthStateChanged,
+  updatePassword,
+  EmailAuthProvider,
+  reauthenticateWithCredential
 } from 'firebase/auth';
 import { 
   doc, 
@@ -41,7 +45,8 @@ export function AuthProvider({ children }) {
           email: user.email,
           displayName: user.displayName,
           photoURL: user.photoURL,
-          role: 'pending', // Admin ต้องอนุมัติก่อน
+          role: 'pending',
+          authProvider: 'google',
           createdAt: serverTimestamp()
         });
       }
@@ -50,6 +55,78 @@ export function AuthProvider({ children }) {
     } catch (error) {
       console.error('Login error:', error);
       return { success: false, error: error.message };
+    }
+  }
+
+  // Login with Email/Password
+  async function loginWithEmail(email, password) {
+    try {
+      const result = await signInWithEmailAndPassword(auth, email, password);
+      return { success: true, user: result.user };
+    } catch (error) {
+      console.error('Login error:', error);
+      let errorMessage = 'เข้าสู่ระบบไม่สำเร็จ';
+      
+      switch (error.code) {
+        case 'auth/user-not-found':
+          errorMessage = 'ไม่พบบัญชีผู้ใช้นี้';
+          break;
+        case 'auth/wrong-password':
+          errorMessage = 'รหัสผ่านไม่ถูกต้อง';
+          break;
+        case 'auth/invalid-email':
+          errorMessage = 'รูปแบบอีเมลไม่ถูกต้อง';
+          break;
+        case 'auth/too-many-requests':
+          errorMessage = 'ลองเข้าสู่ระบบหลายครั้งเกินไป กรุณารอสักครู่';
+          break;
+        case 'auth/invalid-credential':
+          errorMessage = 'อีเมลหรือรหัสผ่านไม่ถูกต้อง';
+          break;
+        default:
+          errorMessage = error.message;
+      }
+      
+      return { success: false, error: errorMessage };
+    }
+  }
+
+  // Change password
+  async function changePassword(currentPassword, newPassword) {
+    try {
+      const user = auth.currentUser;
+      
+      // Re-authenticate user first
+      const credential = EmailAuthProvider.credential(user.email, currentPassword);
+      await reauthenticateWithCredential(user, credential);
+      
+      // Update password
+      await updatePassword(user, newPassword);
+      
+      // Update Firestore to mark password as changed
+      const userRef = doc(db, 'users', user.uid);
+      await setDoc(userRef, { 
+        passwordChanged: true,
+        passwordChangedAt: serverTimestamp()
+      }, { merge: true });
+      
+      return { success: true };
+    } catch (error) {
+      console.error('Change password error:', error);
+      let errorMessage = 'เปลี่ยนรหัสผ่านไม่สำเร็จ';
+      
+      switch (error.code) {
+        case 'auth/wrong-password':
+          errorMessage = 'รหัสผ่านปัจจุบันไม่ถูกต้อง';
+          break;
+        case 'auth/weak-password':
+          errorMessage = 'รหัสผ่านใหม่ต้องมีอย่างน้อย 6 ตัวอักษร';
+          break;
+        default:
+          errorMessage = error.message;
+      }
+      
+      return { success: false, error: errorMessage };
     }
   }
 
@@ -113,11 +190,14 @@ export function AuthProvider({ children }) {
     userData,
     loading,
     loginWithGoogle,
+    loginWithEmail,
+    changePassword,
     logout,
     fetchUserData,
     isAdmin: userRole === 'admin',
     isTA: userRole === 'ta',
-    isPending: userRole === 'pending'
+    isPending: userRole === 'pending',
+    isEmailAuth: userData?.authProvider === 'email'
   };
 
   return (

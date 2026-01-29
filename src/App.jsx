@@ -6,15 +6,17 @@ import { AuthProvider, useAuth } from './contexts/AuthContext';
 import LoginPage from './components/LoginPage';
 import AdminPanel from './components/AdminPanel';
 import DataViewer from './components/DataViewer';
-import { LogOut, Settings, BarChart2, User, Clock } from 'lucide-react';
+import ChangePasswordModal from './components/ChangePasswordModal';
+import { LogOut, Settings, BarChart2, User, Clock, Key } from 'lucide-react';
 
 function AppContent() {
-  const { currentUser, userRole, userData, logout, isAdmin, isTA, isPending } = useAuth();
+  const { currentUser, userRole, userData, logout, isAdmin, isTA, isPending, isEmailAuth } = useAuth();
   const [activeView, setActiveView] = useState('data'); // 'data' or 'admin'
   const [selectedSemester, setSelectedSemester] = useState('');
   const [semesters, setSemesters] = useState([]);
   const [taAssignment, setTAAssignment] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [showChangePassword, setShowChangePassword] = useState(false);
 
   // Fetch available semesters and TA assignment
   useEffect(() => {
@@ -165,7 +167,7 @@ function AppContent() {
               )}
 
               {/* User menu */}
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
                 {currentUser.photoURL && (
                   <img 
                     src={currentUser.photoURL} 
@@ -173,6 +175,18 @@ function AppContent() {
                     className="w-8 h-8 rounded-full"
                   />
                 )}
+                
+                {/* Change Password Button (only for email auth users) */}
+                {userData?.authProvider === 'email' && (
+                  <button
+                    onClick={() => setShowChangePassword(true)}
+                    className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition"
+                    title="เปลี่ยนรหัสผ่าน"
+                  >
+                    <Key className="w-5 h-5" />
+                  </button>
+                )}
+                
                 <button
                   onClick={handleLogout}
                   className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition"
@@ -246,6 +260,31 @@ function AppContent() {
           </div>
         </div>
       </footer>
+
+      {/* Password Change Reminder for first-time email users */}
+      {userData?.authProvider === 'email' && !userData?.passwordChanged && (
+        <div className="fixed bottom-4 right-4 max-w-sm bg-yellow-900/90 border border-yellow-500/30 rounded-xl p-4 shadow-lg z-40">
+          <div className="flex items-start gap-3">
+            <Key className="w-5 h-5 text-yellow-400 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-yellow-200 font-medium">แนะนำให้เปลี่ยนรหัสผ่าน</p>
+              <p className="text-yellow-300/70 text-sm mt-1">คุณกำลังใช้รหัสผ่านที่ Admin ตั้งให้ แนะนำให้เปลี่ยนเป็นรหัสผ่านของคุณเอง</p>
+              <button
+                onClick={() => setShowChangePassword(true)}
+                className="mt-3 px-4 py-2 bg-yellow-600 hover:bg-yellow-500 text-white text-sm rounded-lg transition"
+              >
+                เปลี่ยนรหัสผ่าน
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Change Password Modal */}
+      <ChangePasswordModal 
+        isOpen={showChangePassword} 
+        onClose={() => setShowChangePassword(false)} 
+      />
     </div>
   );
 }

@@ -13,11 +13,12 @@ import {
   serverTimestamp,
   getDoc
 } from 'firebase/firestore';
-import { db } from '../firebase';
+import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+import { db, secondaryAuth } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { parseCSV } from '../utils/csvParser';
 import Papa from 'papaparse';
-import { Upload, Users, UserPlus, Settings, Trash2, Edit, Save, X, ChevronRight, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { Upload, Users, UserPlus, Settings, Trash2, Edit, Save, X, ChevronRight, CheckCircle2, AlertTriangle, Eye, EyeOff, Mail, Lock, Key } from 'lucide-react';
 
 export default function AdminPanel({ onViewData }) {
   const { currentUser } = useAuth();
@@ -31,7 +32,16 @@ export default function AdminPanel({ onViewData }) {
   // TAs state
   const [tas, setTAs] = useState([]);
   const [loadingTAs, setLoadingTAs] = useState(true);
-  const [newTA, setNewTA] = useState({ email: '', assignedGroups: '', canViewAll: false });
+  const [newTA, setNewTA] = useState({ 
+    email: '', 
+    password: '', 
+    displayName: '',
+    assignedGroups: '', 
+    canViewAll: false,
+    role: 'ta',
+    authType: 'email' // 'email' หรือ 'google'
+  });
+  const [showPassword, setShowPassword] = useState(false);
   const [selectedSemester, setSelectedSemester] = useState('');
   
   // Upload state
@@ -274,36 +284,88 @@ export default function AdminPanel({ onViewData }) {
 
   // Add TA
   const handleAddTA = async () => {
-    if (!newTA.email || !selectedSemester) return;
+    if (!newTA.email || !selectedSemester) {
+      setUploadError('กรุณากรอกอีเมล');
+      return;
+    }
+    
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(newTA.email)) {
+      setUploadError('รูปแบบอีเมลไม่ถูกต้อง');
+      return;
+    }
+    
+    // For email auth, password is required
+    if (newTA.authType === 'email' && (!newTA.password || newTA.password.length < 6)) {
+      setUploadError('กรุณากรอกรหัสผ่าน (อย่างน้อย 6 ตัวอักษร)');
+      return;
+    }
+    
+    setUploading(true);
+    setUploadError(null);
     
     try {
-      // Check if email is valid Gmail
-      if (!newTA.email.includes('@gmail.com') && !newTA.email.includes('@cmu.ac.th')) {
-        setUploadError('กรุณาใช้อีเมล Gmail หรือ CMU');
-        return;
-      }
+      let userId;
       
-      // First, check if user exists or create pending user
+      // Check if user already exists in Firestore
       const usersQuery = query(collection(db, 'users'), where('email', '==', newTA.email));
       const usersSnapshot = await getDocs(usersQuery);
       
-      let userId;
-      if (usersSnapshot.empty) {
-        // Create pending user
-        const newUserRef = await addDoc(collection(db, 'users'), {
-          email: newTA.email,
-          displayName: newTA.email.split('@')[0],
-          role: 'ta',
-          createdAt: serverTimestamp()
-        });
-        userId = newUserRef.id;
-      } else {
+      if (!usersSnapshot.empty) {
+        // User exists - update role
         userId = usersSnapshot.docs[0].id;
-        // Update role to TA if pending
         const userData = usersSnapshot.docs[0].data();
         if (userData.role === 'pending') {
-          await updateDoc(doc(db, 'users', userId), { role: 'ta' });
+          await updateDoc(doc(db, 'users', userId), { role: newTA.role });
         }
+      } else if (newTA.authType === 'email') {
+        // Create new user with Email/Password using secondary auth (so admin doesn't get logged out)
+        try {
+          const userCredential = await createUserWithEmailAndPassword(
+            secondaryAuth, 
+            newTA.email, 
+            newTA.password
+          );
+          userId = userCredential.user.uid;
+          
+          // Sign out from secondary auth immediately
+          await signOut(secondaryAuth);
+          
+          // Create user document in Firestore
+          await setDoc(doc(db, 'users', userId), {
+            email: newTA.email,
+            displayName: newTA.displayName || newTA.email.split('@')[0],
+            role: newTA.role,
+            authProvider: 'email',
+            passwordChanged: false,
+            createdAt: serverTimestamp(),
+            createdBy: currentUser.uid
+          });
+        } catch (authError) {
+          if (authError.code === 'auth/email-already-in-use') {
+            setUploadError('อีเมลนี้มีบัญชีอยู่แล้ว (อาจใช้ Google Login)');
+          } else if (authError.code === 'auth/weak-password') {
+            setUploadError('รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร');
+          } else if (authError.code === 'auth/invalid-email') {
+            setUploadError('รูปแบบอีเมลไม่ถูกต้อง');
+          } else {
+            setUploadError(`เกิดข้อผิดพลาด: ${authError.message}`);
+          }
+          setUploading(false);
+          return;
+        }
+      } else {
+        // Google auth - just create pending user in Firestore
+        const newUserRef = await addDoc(collection(db, 'users'), {
+          email: newTA.email,
+          displayName: newTA.displayName || newTA.email.split('@')[0],
+          role: newTA.role,
+          authProvider: 'google',
+          createdAt: serverTimestamp(),
+          createdBy: currentUser.uid
+        });
+        userId = newUserRef.id;
       }
       
       // Create TA assignment
@@ -321,12 +383,22 @@ export default function AdminPanel({ onViewData }) {
         createdAt: serverTimestamp()
       });
       
-      setNewTA({ email: '', assignedGroups: '', canViewAll: false });
+      setNewTA({ 
+        email: '', 
+        password: '', 
+        displayName: '',
+        assignedGroups: '', 
+        canViewAll: false,
+        role: 'ta',
+        authType: 'email'
+      });
       fetchTAs();
-      setUploadSuccess('เพิ่ม TA สำเร็จ!');
+      setUploadSuccess(`เพิ่ม ${newTA.role === 'admin' ? 'Admin' : 'TA'} สำเร็จ! ${newTA.authType === 'email' ? '(รหัสผ่าน: ' + newTA.password + ')' : '(ใช้ Google Login)'}`);
     } catch (error) {
       console.error('Error adding TA:', error);
       setUploadError(`เกิดข้อผิดพลาด: ${error.message}`);
+    } finally {
+      setUploading(false);
     }
   };
 
@@ -583,58 +655,160 @@ export default function AdminPanel({ onViewData }) {
 
           {selectedSemester && (
             <>
-              {/* Add TA */}
+              {/* Add TA/Admin */}
               <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6">
                 <h3 className="text-lg font-semibold mb-4 flex items-center gap-2">
-                  <UserPlus className="w-5 h-5" /> เพิ่ม TA
+                  <UserPlus className="w-5 h-5" /> เพิ่มผู้ใช้งาน
                 </h3>
-                <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
-                  <input
-                    type="email"
-                    placeholder="อีเมล Gmail / CMU"
-                    value={newTA.email}
-                    onChange={(e) => setNewTA({ ...newTA, email: e.target.value })}
-                    className="px-4 py-2 bg-slate-800 border border-white/10 rounded-lg text-white"
-                  />
+                
+                {/* Role & Auth Type Selection */}
+                <div className="grid md:grid-cols-2 gap-4 mb-4">
                   <div>
+                    <label className="block text-sm text-slate-400 mb-2">บทบาท</label>
+                    <select
+                      value={newTA.role}
+                      onChange={(e) => setNewTA({ ...newTA, role: e.target.value })}
+                      className="w-full px-4 py-2 bg-slate-800 border border-white/10 rounded-lg text-white"
+                    >
+                      <option value="ta">TA</option>
+                      <option value="admin">Admin</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-slate-400 mb-2">ประเภทการ Login</label>
+                    <select
+                      value={newTA.authType}
+                      onChange={(e) => setNewTA({ ...newTA, authType: e.target.value })}
+                      className="w-full px-4 py-2 bg-slate-800 border border-white/10 rounded-lg text-white"
+                    >
+                      <option value="email">Email / Password</option>
+                      <option value="google">Google (Gmail/CMU)</option>
+                    </select>
+                  </div>
+                </div>
+                
+                {/* User Info */}
+                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+                  <div>
+                    <label className="block text-sm text-slate-400 mb-2">
+                      <Mail className="w-4 h-4 inline mr-1" /> อีเมล *
+                    </label>
                     <input
-                      type="text"
-                      placeholder="กลุ่มที่ดูแล (คั่นด้วย ,)"
-                      value={newTA.assignedGroups}
-                      onChange={(e) => setNewTA({ ...newTA, assignedGroups: e.target.value })}
+                      type="email"
+                      placeholder="example@email.com"
+                      value={newTA.email}
+                      onChange={(e) => setNewTA({ ...newTA, email: e.target.value })}
                       className="w-full px-4 py-2 bg-slate-800 border border-white/10 rounded-lg text-white"
                     />
-                    {availableGroups.length > 0 && (
-                      <div className="text-xs text-slate-500 mt-1">
-                        กลุ่มที่มี: {availableGroups.join(', ')}
-                      </div>
-                    )}
                   </div>
-                  <label className="flex items-center gap-2 text-slate-300">
+                  
+                  {newTA.authType === 'email' && (
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-2">
+                        <Key className="w-4 h-4 inline mr-1" /> รหัสผ่านเริ่มต้น *
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showPassword ? 'text' : 'password'}
+                          placeholder="อย่างน้อย 6 ตัวอักษร"
+                          value={newTA.password}
+                          onChange={(e) => setNewTA({ ...newTA, password: e.target.value })}
+                          className="w-full px-4 py-2 pr-10 bg-slate-800 border border-white/10 rounded-lg text-white"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                        >
+                          {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  
+                  <div>
+                    <label className="block text-sm text-slate-400 mb-2">ชื่อที่แสดง</label>
                     <input
-                      type="checkbox"
-                      checked={newTA.canViewAll}
-                      onChange={(e) => setNewTA({ ...newTA, canViewAll: e.target.checked })}
-                      className="w-5 h-5 rounded"
+                      type="text"
+                      placeholder="ชื่อ-นามสกุล (ไม่บังคับ)"
+                      value={newTA.displayName}
+                      onChange={(e) => setNewTA({ ...newTA, displayName: e.target.value })}
+                      className="w-full px-4 py-2 bg-slate-800 border border-white/10 rounded-lg text-white"
                     />
-                    ดูได้ทุกกลุ่ม
-                  </label>
-                  <button
-                    onClick={handleAddTA}
-                    className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg font-medium"
-                  >
-                    เพิ่ม TA
-                  </button>
+                  </div>
                 </div>
+                
+                {/* Group Assignment (for TA only) */}
+                {newTA.role === 'ta' && (
+                  <div className="grid md:grid-cols-2 gap-4 mb-4">
+                    <div>
+                      <label className="block text-sm text-slate-400 mb-2">กลุ่มที่ดูแล</label>
+                      <input
+                        type="text"
+                        placeholder="คั่นด้วย , (เช่น Group A, Group B)"
+                        value={newTA.assignedGroups}
+                        onChange={(e) => setNewTA({ ...newTA, assignedGroups: e.target.value })}
+                        className="w-full px-4 py-2 bg-slate-800 border border-white/10 rounded-lg text-white"
+                      />
+                      {availableGroups.length > 0 && (
+                        <div className="text-xs text-slate-500 mt-1">
+                          กลุ่มที่มี: {availableGroups.join(', ')}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center">
+                      <label className="flex items-center gap-2 text-slate-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={newTA.canViewAll}
+                          onChange={(e) => setNewTA({ ...newTA, canViewAll: e.target.checked })}
+                          className="w-5 h-5 rounded"
+                        />
+                        ดูได้ทุกกลุ่ม
+                      </label>
+                    </div>
+                  </div>
+                )}
+                
+                {/* Submit Button */}
+                <button
+                  onClick={handleAddTA}
+                  disabled={uploading}
+                  className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-500 hover:to-emerald-500 rounded-lg font-medium transition disabled:opacity-50 flex items-center gap-2"
+                >
+                  {uploading ? (
+                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>
+                  ) : (
+                    <UserPlus className="w-5 h-5" />
+                  )}
+                  เพิ่ม {newTA.role === 'admin' ? 'Admin' : 'TA'}
+                </button>
+                
+                {/* Info */}
+                {newTA.authType === 'email' && (
+                  <div className="mt-4 p-3 bg-blue-900/30 border border-blue-500/30 rounded-lg">
+                    <p className="text-blue-300 text-sm">
+                      💡 ผู้ใช้จะได้รับรหัสผ่านเริ่มต้นที่คุณกำหนด และสามารถเปลี่ยนรหัสผ่านได้หลัง Login
+                    </p>
+                  </div>
+                )}
+                
+                {newTA.authType === 'google' && (
+                  <div className="mt-4 p-3 bg-yellow-900/30 border border-yellow-500/30 rounded-lg">
+                    <p className="text-yellow-300 text-sm">
+                      ⚠️ ผู้ใช้ต้อง Login ด้วย Google ที่ใช้อีเมลตรงกับที่ระบุเท่านั้น
+                    </p>
+                  </div>
+                )}
               </div>
 
               {/* TA List */}
               <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6">
-                <h3 className="text-lg font-semibold mb-4">รายชื่อ TA</h3>
+                <h3 className="text-lg font-semibold mb-4">รายชื่อผู้ใช้งาน</h3>
                 {loadingTAs ? (
                   <p className="text-slate-400">กำลังโหลด...</p>
                 ) : tas.length === 0 ? (
-                  <p className="text-slate-400">ยังไม่มี TA</p>
+                  <p className="text-slate-400">ยังไม่มีผู้ใช้งาน</p>
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full">
