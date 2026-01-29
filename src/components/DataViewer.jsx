@@ -4,9 +4,12 @@ import { doc, getDoc, collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { getFlaggedStudents, getFlaggedGraders } from '../utils/csvParser';
+import ReviewStatusModal, { getStatusInfo, STATUS_OPTIONS } from './ReviewStatusModal';
+import TAReviewSummary from './TAReviewSummary';
 import { 
   Users, Search, Download, ChevronRight, AlertCircle, CheckCircle2, 
-  XCircle, AlertTriangle, UserCheck, BarChart2, FileText, ClipboardList, Filter 
+  XCircle, AlertTriangle, UserCheck, BarChart2, FileText, ClipboardList, Filter,
+  MessageSquare, ChevronDown
 } from 'lucide-react';
 
 export default function DataViewer({ semesterId, taAssignment }) {
@@ -29,6 +32,27 @@ export default function DataViewer({ semesterId, taAssignment }) {
   const [studentPage, setStudentPage] = useState(1);
   const [graderPage, setGraderPage] = useState(1);
   const ITEMS_PER_PAGE = 50;
+  
+  // Review Status state
+  const [reviewStatuses, setReviewStatuses] = useState({});
+  const [statusModal, setStatusModal] = useState({ isOpen: false, item: null });
+  
+  // Advanced Filters
+  const [studentFilters, setStudentFilters] = useState({
+    graderStatus: 'all', // all, complete, incomplete
+    scoreRange: 'all', // all, high, medium, low
+    reviewStatus: 'all', // all, pending, reviewed, fixed, escalated
+    hasFlag: 'all' // all, yes, no
+  });
+  
+  const [graderFilters, setGraderFilters] = useState({
+    reviewCompletion: 'all', // all, complete, incomplete
+    bonusStatus: 'all', // all, hasBonus, noBonus
+    reviewStatus: 'all',
+    hasFlag: 'all'
+  });
+  
+  const [showFilters, setShowFilters] = useState(false);
 
   // Fetch data from Firestore
   useEffect(() => {
@@ -95,6 +119,15 @@ export default function DataViewer({ semesterId, taAssignment }) {
             setSelectedGroupSet(sData.groupSets[0]);
           }
         }
+        
+        // Fetch review statuses
+        const statusCol = collection(db, 'semesters', semesterId, 'reviewStatuses');
+        const statusSnap = await getDocs(statusCol);
+        const statuses = {};
+        statusSnap.docs.forEach(doc => {
+          statuses[doc.id] = doc.data();
+        });
+        setReviewStatuses(statuses);
       } catch (err) {
         console.error('Error fetching data:', err);
         setError(`เกิดข้อผิดพลาด: ${err.message}`);
@@ -148,9 +181,47 @@ export default function DataViewer({ semesterId, taAssignment }) {
       }
       
       const matchGroup = !groupFilter || group === groupFilter;
-      return matchSearch && matchGroup;
+      
+      // Advanced filters
+      const statusKey = `student_${s.studentId}`;
+      const itemStatus = reviewStatuses[statusKey]?.status || 'pending';
+      
+      // Grader status filter
+      let matchGraderStatus = true;
+      if (studentFilters.graderStatus === 'complete') {
+        matchGraderStatus = s.gradersCompleted === s.gradersAssigned;
+      } else if (studentFilters.graderStatus === 'incomplete') {
+        matchGraderStatus = s.gradersCompleted < s.gradersAssigned;
+      }
+      
+      // Score range filter
+      let matchScoreRange = true;
+      const avg = s.workScore.average || 0;
+      if (studentFilters.scoreRange === 'high') {
+        matchScoreRange = avg >= 10;
+      } else if (studentFilters.scoreRange === 'medium') {
+        matchScoreRange = avg >= 6 && avg < 10;
+      } else if (studentFilters.scoreRange === 'low') {
+        matchScoreRange = avg < 6;
+      }
+      
+      // Review status filter
+      let matchReviewStatus = true;
+      if (studentFilters.reviewStatus !== 'all') {
+        matchReviewStatus = itemStatus === studentFilters.reviewStatus;
+      }
+      
+      // Has flag filter
+      let matchHasFlag = true;
+      if (studentFilters.hasFlag === 'yes') {
+        matchHasFlag = s.flags.length > 0;
+      } else if (studentFilters.hasFlag === 'no') {
+        matchHasFlag = s.flags.length === 0;
+      }
+      
+      return matchSearch && matchGroup && matchGraderStatus && matchScoreRange && matchReviewStatus && matchHasFlag;
     }).sort((a, b) => b.workScore.average - a.workScore.average);
-  }, [data, searchQuery, groupFilter, getStudentGroup, isTA, taAssignment, allowedGroups]);
+  }, [data, searchQuery, groupFilter, getStudentGroup, isTA, taAssignment, allowedGroups, studentFilters, reviewStatuses]);
 
   // Filter graders
   const filteredGraders = useMemo(() => {
@@ -169,9 +240,45 @@ export default function DataViewer({ semesterId, taAssignment }) {
       }
       
       const matchGroup = !groupFilter || group === groupFilter;
-      return matchSearch && matchGroup;
+      
+      // Advanced filters
+      const statusKey = `grader_${g.graderId}`;
+      const itemStatus = reviewStatuses[statusKey]?.status || 'pending';
+      const pr = g.peerReviewScore;
+      
+      // Review completion filter
+      let matchCompletion = true;
+      if (graderFilters.reviewCompletion === 'complete') {
+        matchCompletion = pr.reviewedCount === g.assignedReviews;
+      } else if (graderFilters.reviewCompletion === 'incomplete') {
+        matchCompletion = pr.reviewedCount < g.assignedReviews;
+      }
+      
+      // Bonus status filter
+      let matchBonus = true;
+      if (graderFilters.bonusStatus === 'hasBonus') {
+        matchBonus = pr.bonus > 0;
+      } else if (graderFilters.bonusStatus === 'noBonus') {
+        matchBonus = pr.bonus === 0;
+      }
+      
+      // Review status filter
+      let matchReviewStatus = true;
+      if (graderFilters.reviewStatus !== 'all') {
+        matchReviewStatus = itemStatus === graderFilters.reviewStatus;
+      }
+      
+      // Has flag filter
+      let matchHasFlag = true;
+      if (graderFilters.hasFlag === 'yes') {
+        matchHasFlag = g.flags.length > 0;
+      } else if (graderFilters.hasFlag === 'no') {
+        matchHasFlag = g.flags.length === 0;
+      }
+      
+      return matchSearch && matchGroup && matchCompletion && matchBonus && matchReviewStatus && matchHasFlag;
     }).sort((a, b) => b.peerReviewScore.netScore - a.peerReviewScore.netScore);
-  }, [data, searchQuery, groupFilter, getStudentGroup, isTA, taAssignment, allowedGroups]);
+  }, [data, searchQuery, groupFilter, getStudentGroup, isTA, taAssignment, allowedGroups, graderFilters, reviewStatuses]);
 
   const flaggedStudents = useMemo(() => data ? getFlaggedStudents(data.students) : [], [data]);
   const flaggedGraders = useMemo(() => data ? getFlaggedGraders(data.graders) : [], [data]);
@@ -247,6 +354,10 @@ export default function DataViewer({ semesterId, taAssignment }) {
   const exportStudentScores = useCallback(() => {
     if (!data) return;
     const rows = filteredStudents.map((s, i) => {
+      const statusKey = `student_${s.studentId}`;
+      const itemStatus = reviewStatuses[statusKey];
+      const statusInfo = getStatusInfo(itemStatus?.status || 'pending');
+      
       const row = {
         'ลำดับ': i + 1,
         'รหัสนักศึกษา': s.studentId,
@@ -264,15 +375,22 @@ export default function DataViewer({ semesterId, taAssignment }) {
         'คะแนนสูงสุด': s.workScore.max || '-',
         'SD': s.workScore.stdDev,
         'เชื่อถือได้': s.workScore.isReliable ? 'ใช่' : 'ไม่',
-        'Flags': s.flags.map(f => f.message).join('; ')
+        'Flags': s.flags.map(f => f.message).join('; '),
+        'สถานะการตรวจ': statusInfo.label,
+        'โน้ต': itemStatus?.note || '-',
+        'ตรวจโดย': itemStatus?.updatedByName || '-'
       };
     });
     downloadCSV(rows, 'student-work-scores');
-  }, [data, filteredStudents, selectedGroupSet, getStudentGroup]);
+  }, [data, filteredStudents, selectedGroupSet, getStudentGroup, reviewStatuses]);
 
   const exportGraderScores = useCallback(() => {
     if (!data) return;
     const rows = filteredGraders.map((g, i) => {
+      const statusKey = `grader_${g.graderId}`;
+      const itemStatus = reviewStatuses[statusKey];
+      const statusInfo = getStatusInfo(itemStatus?.status || 'pending');
+      
       const row = {
         'ลำดับ': i + 1,
         'รหัสนักศึกษา': g.graderId,
@@ -290,11 +408,14 @@ export default function DataViewer({ semesterId, taAssignment }) {
         'โบนัส': g.peerReviewScore.bonus,
         'คะแนนรวม': g.peerReviewScore.netScore,
         'คะแนนเต็ม': g.peerReviewScore.fullScore,
-        'Flags': g.flags.map(f => f.message).join('; ')
+        'Flags': g.flags.map(f => f.message).join('; '),
+        'สถานะการตรวจ': statusInfo.label,
+        'โน้ต': itemStatus?.note || '-',
+        'ตรวจโดย': itemStatus?.updatedByName || '-'
       };
     });
     downloadCSV(rows, 'grader-peer-review-scores');
-  }, [data, filteredGraders, selectedGroupSet, getStudentGroup]);
+  }, [data, filteredGraders, selectedGroupSet, getStudentGroup, reviewStatuses]);
 
   if (loading) {
     return (
@@ -382,6 +503,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
           { id: 'students', label: 'คะแนนชิ้นงาน', icon: Users },
           { id: 'graders', label: 'คะแนน Peer Review', icon: UserCheck },
           { id: 'admin', label: 'ตรวจสอบ', icon: AlertTriangle },
+          ...(isAdmin ? [{ id: 'tasummary', label: 'สรุปการตรวจสอบ', icon: MessageSquare }] : []),
         ].map(tab => (
           <button
             key={tab.id}
@@ -459,6 +581,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
       {/* Students Tab */}
       {activeTab === 'students' && (
         <div className="space-y-4">
+          {/* Search & Export */}
           <div className="flex gap-4 items-center flex-wrap">
             <div className="relative flex-1 min-w-[200px]">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
@@ -470,10 +593,73 @@ export default function DataViewer({ semesterId, taAssignment }) {
                 className="w-full pl-12 pr-4 py-3 bg-slate-900/50 border border-white/10 rounded-xl text-white placeholder-slate-500"
               />
             </div>
+            <button 
+              onClick={() => setShowFilters(!showFilters)}
+              className={`flex items-center gap-2 px-4 py-3 rounded-xl border ${showFilters ? 'bg-cyan-600 border-cyan-500' : 'bg-slate-800 border-white/10 hover:bg-slate-700'}`}
+            >
+              <Filter className="w-5 h-5" /> ตัวกรอง
+              <ChevronDown className={`w-4 h-4 transition ${showFilters ? 'rotate-180' : ''}`} />
+            </button>
             <button onClick={exportStudentScores} className="flex items-center gap-2 px-4 py-3 bg-green-600 hover:bg-green-500 rounded-xl">
               <Download className="w-5 h-5" /> Export
             </button>
           </div>
+
+          {/* Advanced Filters */}
+          {showFilters && (
+            <div className="bg-slate-800/50 border border-white/10 rounded-xl p-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">สถานะ Grader</label>
+                <select
+                  value={studentFilters.graderStatus}
+                  onChange={(e) => setStudentFilters(f => ({ ...f, graderStatus: e.target.value }))}
+                  className="w-full px-3 py-2 bg-slate-700 border border-white/10 rounded-lg text-sm"
+                >
+                  <option value="all">ทั้งหมด</option>
+                  <option value="complete">ครบแล้ว</option>
+                  <option value="incomplete">ยังไม่ครบ</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">ช่วงคะแนน</label>
+                <select
+                  value={studentFilters.scoreRange}
+                  onChange={(e) => setStudentFilters(f => ({ ...f, scoreRange: e.target.value }))}
+                  className="w-full px-3 py-2 bg-slate-700 border border-white/10 rounded-lg text-sm"
+                >
+                  <option value="all">ทั้งหมด</option>
+                  <option value="high">สูง (≥10)</option>
+                  <option value="medium">ปานกลาง (6-9)</option>
+                  <option value="low">ต่ำ (&lt;6)</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">สถานะการตรวจ</label>
+                <select
+                  value={studentFilters.reviewStatus}
+                  onChange={(e) => setStudentFilters(f => ({ ...f, reviewStatus: e.target.value }))}
+                  className="w-full px-3 py-2 bg-slate-700 border border-white/10 rounded-lg text-sm"
+                >
+                  <option value="all">ทั้งหมด</option>
+                  {STATUS_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">มี Flag</label>
+                <select
+                  value={studentFilters.hasFlag}
+                  onChange={(e) => setStudentFilters(f => ({ ...f, hasFlag: e.target.value }))}
+                  className="w-full px-3 py-2 bg-slate-700 border border-white/10 rounded-lg text-sm"
+                >
+                  <option value="all">ทั้งหมด</option>
+                  <option value="yes">มี Flag</option>
+                  <option value="no">ไม่มี Flag</option>
+                </select>
+              </div>
+            </div>
+          )}
 
           <div className="bg-slate-900/50 border border-white/10 rounded-2xl overflow-hidden">
             <div className="overflow-x-auto">
@@ -490,26 +676,32 @@ export default function DataViewer({ semesterId, taAssignment }) {
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">Min-Max</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">SD</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">เชื่อถือได้</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">สถานะ</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
-                  {filteredStudents.slice(0, studentPage * ITEMS_PER_PAGE).map(student => (
-                    <tr key={student.studentName} className="hover:bg-white/5">
-                      <td className="px-4 py-3 font-mono text-sm">{student.studentId}</td>
-                      <td className="px-4 py-3">
-                        {student.fullName}
-                        {student.flags.length > 0 && <AlertTriangle className="inline w-4 h-4 text-yellow-400 ml-2" />}
-                      </td>
-                      {selectedGroupSet && (
-                        <td className="px-4 py-3 text-sm">
-                          <span className="bg-slate-700 px-2 py-1 rounded text-xs">
-                            {getStudentGroup(student.studentId) || '-'}
-                          </span>
+                  {filteredStudents.slice(0, studentPage * ITEMS_PER_PAGE).map(student => {
+                    const statusKey = `student_${student.studentId}`;
+                    const itemStatus = reviewStatuses[statusKey];
+                    const statusInfo = getStatusInfo(itemStatus?.status || 'pending');
+                    
+                    return (
+                      <tr key={student.studentName} className="hover:bg-white/5">
+                        <td className="px-4 py-3 font-mono text-sm">{student.studentId}</td>
+                        <td className="px-4 py-3">
+                          {student.fullName}
+                          {student.flags.length > 0 && <AlertTriangle className="inline w-4 h-4 text-yellow-400 ml-2" />}
                         </td>
-                      )}
-                      <td className="px-4 py-3 text-center">
-                        <span className="text-cyan-400">{student.gradersCompleted}</span>
-                        <span className="text-slate-500">/{student.gradersAssigned}</span>
+                        {selectedGroupSet && (
+                          <td className="px-4 py-3 text-sm">
+                            <span className="bg-slate-700 px-2 py-1 rounded text-xs">
+                              {getStudentGroup(student.studentId) || '-'}
+                            </span>
+                          </td>
+                        )}
+                        <td className="px-4 py-3 text-center">
+                          <span className="text-cyan-400">{student.gradersCompleted}</span>
+                          <span className="text-slate-500">/{student.gradersAssigned}</span>
                       </td>
                       <td className="px-4 py-3 text-center">
                         <span className={`font-semibold ${getScoreColor(student.workScore.average, 12)}`}>
@@ -530,8 +722,23 @@ export default function DataViewer({ semesterId, taAssignment }) {
                           : <XCircle className="w-5 h-5 text-slate-500 mx-auto" />
                         }
                       </td>
+                      <td className="px-4 py-3 text-center">
+                        <button
+                          onClick={() => setStatusModal({
+                            isOpen: true,
+                            itemType: 'student',
+                            itemId: student.studentId,
+                            itemName: student.fullName,
+                            currentStatus: itemStatus
+                          })}
+                          className={`px-2 py-1 rounded text-xs ${statusInfo.bg} ${statusInfo.color} hover:opacity-80 transition`}
+                        >
+                          {statusInfo.label}
+                        </button>
+                      </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -565,6 +772,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
       {/* Graders Tab */}
       {activeTab === 'graders' && (
         <div className="space-y-4">
+          {/* Search & Export */}
           <div className="flex gap-4 items-center flex-wrap">
             <div className="relative flex-1 min-w-[200px]">
               <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
@@ -576,10 +784,72 @@ export default function DataViewer({ semesterId, taAssignment }) {
                 className="w-full pl-12 pr-4 py-3 bg-slate-900/50 border border-white/10 rounded-xl text-white placeholder-slate-500"
               />
             </div>
+            <button 
+              onClick={() => setShowFilters(!showFilters)}
+              className={`flex items-center gap-2 px-4 py-3 rounded-xl border ${showFilters ? 'bg-cyan-600 border-cyan-500' : 'bg-slate-800 border-white/10 hover:bg-slate-700'}`}
+            >
+              <Filter className="w-5 h-5" /> ตัวกรอง
+              <ChevronDown className={`w-4 h-4 transition ${showFilters ? 'rotate-180' : ''}`} />
+            </button>
             <button onClick={exportGraderScores} className="flex items-center gap-2 px-4 py-3 bg-green-600 hover:bg-green-500 rounded-xl">
               <Download className="w-5 h-5" /> Export
             </button>
           </div>
+
+          {/* Advanced Filters */}
+          {showFilters && (
+            <div className="bg-slate-800/50 border border-white/10 rounded-xl p-4 grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">สถานะการรีวิว</label>
+                <select
+                  value={graderFilters.reviewCompletion}
+                  onChange={(e) => setGraderFilters(f => ({ ...f, reviewCompletion: e.target.value }))}
+                  className="w-full px-3 py-2 bg-slate-700 border border-white/10 rounded-lg text-sm"
+                >
+                  <option value="all">ทั้งหมด</option>
+                  <option value="complete">รีวิวครบ</option>
+                  <option value="incomplete">รีวิวไม่ครบ</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">โบนัส</label>
+                <select
+                  value={graderFilters.bonusStatus}
+                  onChange={(e) => setGraderFilters(f => ({ ...f, bonusStatus: e.target.value }))}
+                  className="w-full px-3 py-2 bg-slate-700 border border-white/10 rounded-lg text-sm"
+                >
+                  <option value="all">ทั้งหมด</option>
+                  <option value="hasBonus">ได้โบนัส</option>
+                  <option value="noBonus">ไม่ได้โบนัส</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">สถานะการตรวจ</label>
+                <select
+                  value={graderFilters.reviewStatus}
+                  onChange={(e) => setGraderFilters(f => ({ ...f, reviewStatus: e.target.value }))}
+                  className="w-full px-3 py-2 bg-slate-700 border border-white/10 rounded-lg text-sm"
+                >
+                  <option value="all">ทั้งหมด</option>
+                  {STATUS_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">มี Flag</label>
+                <select
+                  value={graderFilters.hasFlag}
+                  onChange={(e) => setGraderFilters(f => ({ ...f, hasFlag: e.target.value }))}
+                  className="w-full px-3 py-2 bg-slate-700 border border-white/10 rounded-lg text-sm"
+                >
+                  <option value="all">ทั้งหมด</option>
+                  <option value="yes">มี Flag</option>
+                  <option value="no">ไม่มี Flag</option>
+                </select>
+              </div>
+            </div>
+          )}
 
           <div className="bg-slate-800/50 rounded-xl p-3 text-sm flex flex-wrap gap-4">
             <span className="text-slate-400">เงื่อนไข:</span>
@@ -603,11 +873,16 @@ export default function DataViewer({ semesterId, taAssignment }) {
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนน</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">โบนัส</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">รวม</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">สถานะ</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   {filteredGraders.slice(0, graderPage * ITEMS_PER_PAGE).map(grader => {
                     const pr = grader.peerReviewScore;
+                    const statusKey = `grader_${grader.graderId}`;
+                    const itemStatus = reviewStatuses[statusKey];
+                    const statusInfo = getStatusInfo(itemStatus?.status || 'pending');
+                    
                     return (
                       <tr key={grader.graderName} className="hover:bg-white/5">
                         <td className="px-4 py-3 font-mono text-sm">{grader.graderId}</td>
@@ -649,6 +924,20 @@ export default function DataViewer({ semesterId, taAssignment }) {
                           <span className={`font-semibold ${pr.netScore === pr.fullScore ? 'text-green-400' : pr.netScore > 0 ? 'text-cyan-400' : 'text-red-400'}`}>
                             {pr.netScore}/{pr.fullScore}
                           </span>
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          <button
+                            onClick={() => setStatusModal({
+                              isOpen: true,
+                              itemType: 'grader',
+                              itemId: grader.graderId,
+                              itemName: grader.fullName,
+                              currentStatus: itemStatus
+                            })}
+                            className={`px-2 py-1 rounded text-xs ${statusInfo.bg} ${statusInfo.color} hover:opacity-80 transition`}
+                          >
+                            {statusInfo.label}
+                          </button>
                         </td>
                       </tr>
                     );
@@ -781,6 +1070,33 @@ export default function DataViewer({ semesterId, taAssignment }) {
           </div>
         </div>
       )}
+
+      {/* TA Summary Tab (Admin only) */}
+      {activeTab === 'tasummary' && isAdmin && (
+        <TAReviewSummary 
+          semesterId={semesterId} 
+          groupData={groupData}
+          selectedGroupSet={selectedGroupSet}
+        />
+      )}
+
+      {/* Review Status Modal */}
+      <ReviewStatusModal
+        isOpen={statusModal.isOpen}
+        onClose={() => setStatusModal({ isOpen: false, item: null })}
+        semesterId={semesterId}
+        itemType={statusModal.itemType}
+        itemId={statusModal.itemId}
+        itemName={statusModal.itemName}
+        currentStatus={statusModal.currentStatus}
+        onStatusUpdate={(newStatus) => {
+          const key = `${statusModal.itemType}_${statusModal.itemId}`;
+          setReviewStatuses(prev => ({
+            ...prev,
+            [key]: { ...prev[key], ...newStatus }
+          }));
+        }}
+      />
     </div>
   );
 }
