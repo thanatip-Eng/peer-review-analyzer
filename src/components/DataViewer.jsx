@@ -24,6 +24,11 @@ export default function DataViewer({ semesterId, taAssignment }) {
   const [groupFilter, setGroupFilter] = useState('');
   const [selectedStudent, setSelectedStudent] = useState(null);
   const [selectedGrader, setSelectedGrader] = useState(null);
+  
+  // Pagination
+  const [studentPage, setStudentPage] = useState(1);
+  const [graderPage, setGraderPage] = useState(1);
+  const ITEMS_PER_PAGE = 50;
 
   // Fetch data from Firestore
   useEffect(() => {
@@ -488,7 +493,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
-                  {filteredStudents.slice(0, 100).map(student => (
+                  {filteredStudents.slice(0, studentPage * ITEMS_PER_PAGE).map(student => (
                     <tr key={student.studentName} className="hover:bg-white/5">
                       <td className="px-4 py-3 font-mono text-sm">{student.studentId}</td>
                       <td className="px-4 py-3">
@@ -530,11 +535,29 @@ export default function DataViewer({ semesterId, taAssignment }) {
                 </tbody>
               </table>
             </div>
-            {filteredStudents.length > 100 && (
-              <div className="p-4 text-center text-slate-400 text-sm">
-                แสดง 100 จาก {filteredStudents.length} รายการ
-              </div>
-            )}
+            
+            {/* Pagination Info & Load More */}
+            <div className="p-4 flex items-center justify-between border-t border-white/5">
+              <span className="text-slate-400 text-sm">
+                แสดง {Math.min(studentPage * ITEMS_PER_PAGE, filteredStudents.length)} จาก {filteredStudents.length} รายการ
+              </span>
+              {studentPage * ITEMS_PER_PAGE < filteredStudents.length && (
+                <button
+                  onClick={() => setStudentPage(p => p + 1)}
+                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm"
+                >
+                  โหลดเพิ่ม ({filteredStudents.length - studentPage * ITEMS_PER_PAGE} รายการ)
+                </button>
+              )}
+              {filteredStudents.length > ITEMS_PER_PAGE && studentPage > 1 && (
+                <button
+                  onClick={() => setStudentPage(Math.ceil(filteredStudents.length / ITEMS_PER_PAGE))}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm ml-2"
+                >
+                  แสดงทั้งหมด
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -583,7 +606,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
-                  {filteredGraders.slice(0, 100).map(grader => {
+                  {filteredGraders.slice(0, graderPage * ITEMS_PER_PAGE).map(grader => {
                     const pr = grader.peerReviewScore;
                     return (
                       <tr key={grader.graderName} className="hover:bg-white/5">
@@ -633,11 +656,29 @@ export default function DataViewer({ semesterId, taAssignment }) {
                 </tbody>
               </table>
             </div>
-            {filteredGraders.length > 100 && (
-              <div className="p-4 text-center text-slate-400 text-sm">
-                แสดง 100 จาก {filteredGraders.length} รายการ
-              </div>
-            )}
+            
+            {/* Pagination Info & Load More */}
+            <div className="p-4 flex items-center justify-between border-t border-white/5">
+              <span className="text-slate-400 text-sm">
+                แสดง {Math.min(graderPage * ITEMS_PER_PAGE, filteredGraders.length)} จาก {filteredGraders.length} รายการ
+              </span>
+              {graderPage * ITEMS_PER_PAGE < filteredGraders.length && (
+                <button
+                  onClick={() => setGraderPage(p => p + 1)}
+                  className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm"
+                >
+                  โหลดเพิ่ม ({filteredGraders.length - graderPage * ITEMS_PER_PAGE} รายการ)
+                </button>
+              )}
+              {filteredGraders.length > ITEMS_PER_PAGE && graderPage > 1 && (
+                <button
+                  onClick={() => setGraderPage(Math.ceil(filteredGraders.length / ITEMS_PER_PAGE))}
+                  className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm ml-2"
+                >
+                  แสดงทั้งหมด
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

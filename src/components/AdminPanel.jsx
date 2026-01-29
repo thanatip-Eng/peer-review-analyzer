@@ -303,7 +303,7 @@ export default function AdminPanel({ onViewData }) {
   // Add TA
   const handleAddTA = async () => {
     if (!newTA.email || !selectedSemester) {
-      setUploadError('กรุณากรอกอีเมล');
+      setUploadError('กรุณากรอกอีเมลและเลือกเทอม');
       return;
     }
     
@@ -314,17 +314,27 @@ export default function AdminPanel({ onViewData }) {
       return;
     }
     
+    // Debug: แสดง authType ที่เลือก
+    console.log('=== Creating User ===');
+    console.log('Auth Type:', newTA.authType);
+    console.log('Email:', newTA.email);
+    console.log('Password length:', newTA.password?.length || 0);
+    
     // For email auth, password is required
-    if (newTA.authType === 'email' && (!newTA.password || newTA.password.length < 6)) {
-      setUploadError('กรุณากรอกรหัสผ่าน (อย่างน้อย 6 ตัวอักษร)');
-      return;
+    if (newTA.authType === 'email') {
+      if (!newTA.password || newTA.password.length < 6) {
+        setUploadError('กรุณากรอกรหัสผ่าน (อย่างน้อย 6 ตัวอักษร) สำหรับ Email/Password Login');
+        return;
+      }
     }
     
     setUploading(true);
     setUploadError(null);
+    setUploadSuccess(null);
     
     try {
-      let userId;
+      let userId = null;
+      let userCreatedInAuth = false;
       
       // Check if user already exists in Firestore
       const usersQuery = query(collection(db, 'users'), where('email', '==', newTA.email));
@@ -333,12 +343,23 @@ export default function AdminPanel({ onViewData }) {
       if (!usersSnapshot.empty) {
         // User exists - update role
         userId = usersSnapshot.docs[0].id;
-        const userData = usersSnapshot.docs[0].data();
-        if (userData.role === 'pending') {
+        const existingUserData = usersSnapshot.docs[0].data();
+        console.log('User already exists in Firestore:', userId, existingUserData);
+        
+        if (existingUserData.role === 'pending') {
           await updateDoc(doc(db, 'users', userId), { role: newTA.role });
         }
+        
+        // ตรวจสอบว่ามีใน Firebase Auth หรือไม่
+        if (!existingUserData.authProvider) {
+          setUploadError('พบ user นี้ใน Firestore แต่ไม่มีข้อมูล authProvider กรุณาลบ user นี้ใน Firestore แล้วสร้างใหม่');
+          setUploading(false);
+          return;
+        }
       } else if (newTA.authType === 'email') {
-        // Create new user with Email/Password using secondary auth (so admin doesn't get logged out)
+        // Create new user with Email/Password
+        console.log('Creating user with EMAIL/PASSWORD...');
+        
         try {
           const userCredential = await createUserWithEmailAndPassword(
             secondaryAuth, 
@@ -346,11 +367,13 @@ export default function AdminPanel({ onViewData }) {
             newTA.password
           );
           userId = userCredential.user.uid;
+          userCreatedInAuth = true;
+          console.log('✅ User created in Firebase Auth:', userId);
           
           // Sign out from secondary auth immediately
           await signOut(secondaryAuth);
           
-          // Create user document in Firestore
+          // Create user document in Firestore with same UID
           await setDoc(doc(db, 'users', userId), {
             email: newTA.email,
             displayName: newTA.displayName || newTA.email.split('@')[0],
@@ -360,22 +383,45 @@ export default function AdminPanel({ onViewData }) {
             createdAt: serverTimestamp(),
             createdBy: currentUser.uid
           });
+          console.log('✅ User document created in Firestore with UID:', userId);
+          
         } catch (authError) {
-          if (authError.code === 'auth/email-already-in-use') {
-            setUploadError('อีเมลนี้มีบัญชีอยู่แล้ว (อาจใช้ Google Login)');
-          } else if (authError.code === 'auth/weak-password') {
-            setUploadError('รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร');
-          } else if (authError.code === 'auth/invalid-email') {
-            setUploadError('รูปแบบอีเมลไม่ถูกต้อง');
-          } else {
-            setUploadError(`เกิดข้อผิดพลาด: ${authError.message}`);
+          console.error('❌ Firebase Auth Error:', authError.code, authError.message);
+          
+          let errorMsg = '';
+          switch (authError.code) {
+            case 'auth/email-already-in-use':
+              errorMsg = 'อีเมลนี้มีบัญชีอยู่แล้วใน Firebase Auth (อาจใช้ Google Login หรือสร้างไว้แล้ว)';
+              break;
+            case 'auth/weak-password':
+              errorMsg = 'รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร';
+              break;
+            case 'auth/invalid-email':
+              errorMsg = 'รูปแบบอีเมลไม่ถูกต้องสำหรับ Firebase Auth';
+              break;
+            case 'auth/operation-not-allowed':
+              errorMsg = '❌ Email/Password sign-in ยังไม่ได้เปิดใช้งานใน Firebase Console! กรุณาไปเปิดที่ Authentication > Sign-in method > Email/Password';
+              break;
+            case 'auth/network-request-failed':
+              errorMsg = 'เครือข่ายมีปัญหา กรุณาลองใหม่';
+              break;
+            default:
+              errorMsg = `Firebase Auth Error: ${authError.code} - ${authError.message}`;
           }
+          
+          setUploadError(errorMsg);
           setUploading(false);
-          return;
+          return; // ❌ หยุดทำงาน ไม่สร้าง Firestore document
         }
       } else {
-        // Google auth - just create pending user in Firestore
-        const newUserRef = await addDoc(collection(db, 'users'), {
+        // Google auth - สร้าง document ใน Firestore เท่านั้น (user จะถูกสร้างเมื่อ login ด้วย Google)
+        console.log('Creating user for GOOGLE auth (no Firebase Auth user created)...');
+        
+        // Generate a temporary ID for the user document
+        const tempUserRef = doc(collection(db, 'users'));
+        userId = tempUserRef.id;
+        
+        await setDoc(tempUserRef, {
           email: newTA.email,
           displayName: newTA.displayName || newTA.email.split('@')[0],
           role: newTA.role,
@@ -383,7 +429,12 @@ export default function AdminPanel({ onViewData }) {
           createdAt: serverTimestamp(),
           createdBy: currentUser.uid
         });
-        userId = newUserRef.id;
+        console.log('✅ User document created for Google auth:', userId);
+      }
+      
+      // Verify userId exists before creating TA assignment
+      if (!userId) {
+        throw new Error('ไม่สามารถสร้าง User ID ได้');
       }
       
       // Create TA assignment
@@ -400,6 +451,7 @@ export default function AdminPanel({ onViewData }) {
         canViewAll: newTA.canViewAll,
         createdAt: serverTimestamp()
       });
+      console.log('TA assignment created');
       
       // เก็บค่าก่อน reset
       const createdEmail = newTA.email;
