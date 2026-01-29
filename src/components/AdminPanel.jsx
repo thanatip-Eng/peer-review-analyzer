@@ -401,6 +401,12 @@ export default function AdminPanel({ onViewData }) {
         createdAt: serverTimestamp()
       });
       
+      // เก็บค่าก่อน reset
+      const createdEmail = newTA.email;
+      const createdPassword = newTA.password;
+      const createdRole = newTA.role;
+      const createdAuthType = newTA.authType;
+      
       setNewTA({ 
         email: '', 
         password: '', 
@@ -411,7 +417,18 @@ export default function AdminPanel({ onViewData }) {
         authType: 'email'
       });
       fetchTAs();
-      setUploadSuccess(`เพิ่ม ${newTA.role === 'admin' ? 'Admin' : 'TA'} สำเร็จ! ${newTA.authType === 'email' ? '(รหัสผ่าน: ' + newTA.password + ')' : '(ใช้ Google Login)'}`);
+      
+      // แสดงข้อมูลสำหรับ copy ไปบอก TA
+      if (createdAuthType === 'email') {
+        setUploadSuccess(
+          `✅ เพิ่ม ${createdRole === 'admin' ? 'Admin' : 'TA'} สำเร็จ!\n\n` +
+          `📧 Email: ${createdEmail}\n` +
+          `🔑 Password: ${createdPassword}\n\n` +
+          `กรุณาแจ้งข้อมูลนี้ให้ผู้ใช้`
+        );
+      } else {
+        setUploadSuccess(`✅ เพิ่ม ${createdRole === 'admin' ? 'Admin' : 'TA'} สำเร็จ! (ใช้ Google Login กับ ${createdEmail})`);
+      };
     } catch (error) {
       console.error('Error adding TA:', error);
       setUploadError(`เกิดข้อผิดพลาด: ${error.message}`);
@@ -481,17 +498,38 @@ export default function AdminPanel({ onViewData }) {
       {/* Messages */}
       {uploadError && (
         <div className="bg-red-900/30 border border-red-500/30 rounded-xl p-4 flex items-center gap-3">
-          <AlertTriangle className="w-5 h-5 text-red-400" />
+          <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0" />
           <span className="text-red-300">{uploadError}</span>
           <button onClick={() => setUploadError(null)} className="ml-auto text-red-400 hover:text-red-300">×</button>
         </div>
       )}
       
       {uploadSuccess && (
-        <div className="bg-green-900/30 border border-green-500/30 rounded-xl p-4 flex items-center gap-3">
-          <CheckCircle2 className="w-5 h-5 text-green-400" />
-          <span className="text-green-300">{uploadSuccess}</span>
-          <button onClick={() => setUploadSuccess(null)} className="ml-auto text-green-400 hover:text-green-300">×</button>
+        <div className="bg-green-900/30 border border-green-500/30 rounded-xl p-4">
+          <div className="flex items-start gap-3">
+            <CheckCircle2 className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" />
+            <div className="flex-1">
+              <pre className="text-green-300 whitespace-pre-wrap font-sans text-sm">{uploadSuccess}</pre>
+              {uploadSuccess.includes('Password:') && (
+                <button
+                  onClick={() => {
+                    // Extract credentials from message
+                    const emailMatch = uploadSuccess.match(/Email: (.+)/);
+                    const passMatch = uploadSuccess.match(/Password: (.+)/);
+                    if (emailMatch && passMatch) {
+                      const text = `Email: ${emailMatch[1].trim()}\nPassword: ${passMatch[1].trim()}`;
+                      navigator.clipboard.writeText(text);
+                      alert('คัดลอกข้อมูลแล้ว!');
+                    }
+                  }}
+                  className="mt-3 px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded-lg text-sm flex items-center gap-2"
+                >
+                  📋 Copy ข้อมูล Login
+                </button>
+              )}
+            </div>
+            <button onClick={() => setUploadSuccess(null)} className="text-green-400 hover:text-green-300">×</button>
+          </div>
         </div>
       )}
 
