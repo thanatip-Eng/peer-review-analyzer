@@ -17,6 +17,7 @@ import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, secondaryAuth } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { parseCSV } from '../utils/csvParser';
+import ConfirmModal from './ConfirmModal';
 import Papa from 'papaparse';
 import { Upload, Users, UserPlus, Settings, Trash2, Edit, Save, X, ChevronRight, CheckCircle2, AlertTriangle, Eye, EyeOff, Mail, Lock, Key } from 'lucide-react';
 
@@ -51,6 +52,15 @@ export default function AdminPanel({ onViewData }) {
 
   // Available groups (from uploaded data)
   const [availableGroups, setAvailableGroups] = useState([]);
+
+  // Confirm modal state
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+    type: 'danger'
+  });
 
   // Fetch semesters
   const fetchSemesters = useCallback(async () => {
@@ -145,18 +155,26 @@ export default function AdminPanel({ onViewData }) {
   };
 
   // Delete semester
-  const handleDeleteSemester = async (semesterId) => {
-    if (!confirm('ต้องการลบเทอมนี้หรือไม่? ข้อมูลทั้งหมดจะถูกลบ')) return;
-    
-    try {
-      await deleteDoc(doc(db, 'semesters', semesterId));
-      fetchSemesters();
-      if (selectedSemester === semesterId) {
-        setSelectedSemester('');
+  const handleDeleteSemester = (semesterId) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'ลบเทอม',
+      message: 'ต้องการลบเทอมนี้หรือไม่? ข้อมูลทั้งหมดจะถูกลบและไม่สามารถกู้คืนได้',
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'semesters', semesterId));
+          fetchSemesters();
+          if (selectedSemester === semesterId) {
+            setSelectedSemester('');
+          }
+          setUploadSuccess('ลบเทอมสำเร็จ');
+        } catch (error) {
+          console.error('Error deleting semester:', error);
+          setUploadError('เกิดข้อผิดพลาดในการลบเทอม');
+        }
       }
-    } catch (error) {
-      console.error('Error deleting semester:', error);
-    }
+    });
   };
 
   // Upload Peer Review CSV
@@ -413,15 +431,28 @@ export default function AdminPanel({ onViewData }) {
   };
 
   // Delete TA assignment
-  const handleDeleteTA = async (taId) => {
-    if (!confirm('ต้องการลบ TA นี้หรือไม่?')) return;
-    
-    try {
-      await deleteDoc(doc(db, 'taAssignments', taId));
-      fetchTAs();
-    } catch (error) {
-      console.error('Error deleting TA:', error);
-    }
+  const handleDeleteTA = (taId, taEmail) => {
+    setConfirmModal({
+      isOpen: true,
+      title: 'ลบผู้ใช้งาน',
+      message: `ต้องการลบ ${taEmail || 'ผู้ใช้นี้'} ออกจากเทอมนี้หรือไม่?`,
+      type: 'danger',
+      onConfirm: async () => {
+        try {
+          await deleteDoc(doc(db, 'taAssignments', taId));
+          fetchTAs();
+          setUploadSuccess('ลบผู้ใช้สำเร็จ');
+        } catch (error) {
+          console.error('Error deleting TA:', error);
+          setUploadError('เกิดข้อผิดพลาดในการลบผู้ใช้');
+        }
+      }
+    });
+  };
+
+  // Close confirm modal
+  const closeConfirmModal = () => {
+    setConfirmModal(prev => ({ ...prev, isOpen: false }));
   };
 
   return (
@@ -827,7 +858,7 @@ export default function AdminPanel({ onViewData }) {
                             ta={ta} 
                             availableGroups={availableGroups}
                             onUpdate={handleUpdateTA}
-                            onDelete={handleDeleteTA}
+                            onDelete={(id) => handleDeleteTA(id, ta.email)}
                           />
                         ))}
                       </tbody>
@@ -839,6 +870,18 @@ export default function AdminPanel({ onViewData }) {
           )}
         </div>
       )}
+
+      {/* Confirm Modal */}
+      <ConfirmModal
+        isOpen={confirmModal.isOpen}
+        onClose={closeConfirmModal}
+        onConfirm={confirmModal.onConfirm}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        type={confirmModal.type}
+        confirmText="ยืนยันลบ"
+        cancelText="ยกเลิก"
+      />
     </div>
   );
 }
