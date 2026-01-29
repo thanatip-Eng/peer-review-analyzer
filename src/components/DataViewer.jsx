@@ -1,6 +1,6 @@
 // src/components/DataViewer.jsx
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, getDoc, collection, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { getFlaggedStudents, getFlaggedGraders } from '../utils/csvParser';
