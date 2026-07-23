@@ -15,6 +15,15 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
+// Fail loudly (in console) instead of a silent blank page when the build
+// did not receive the VITE_FIREBASE_* env vars.
+if (!firebaseConfig.apiKey) {
+  console.error(
+    '[firebase] Missing VITE_FIREBASE_* env vars at build time. ' +
+      'Set them in Vercel for all environments and redeploy without build cache.'
+  );
+}
+
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 
