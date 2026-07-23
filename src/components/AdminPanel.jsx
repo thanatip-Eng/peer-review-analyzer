@@ -17,9 +17,10 @@ import { createUserWithEmailAndPassword, signOut } from 'firebase/auth';
 import { db, secondaryAuth } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { parseCSV } from '../utils/csvParser';
+import { fetchCourses, fetchAssignments, fetchPeerReviewData, DEFAULT_CANVAS_URL } from '../utils/canvasApi';
 import ConfirmModal from './ConfirmModal';
 import Papa from 'papaparse';
-import { Upload, Users, UserPlus, Settings, Trash2, Edit, Save, X, ChevronRight, CheckCircle2, AlertTriangle, Eye, EyeOff, Mail, Lock, Key } from 'lucide-react';
+import { Upload, Users, UserPlus, Settings, Trash2, Edit, Save, X, ChevronRight, CheckCircle2, AlertTriangle, Eye, EyeOff, Mail, Lock, Key, Cloud, Download, RefreshCw } from 'lucide-react';
 
 export default function AdminPanel({ onViewData }) {
   const { currentUser } = useAuth();
@@ -52,6 +53,19 @@ export default function AdminPanel({ onViewData }) {
 
   // Available groups (from uploaded data)
   const [availableGroups, setAvailableGroups] = useState([]);
+
+  // ===== Canvas direct-fetch state =====
+  const [peerReviewMode, setPeerReviewMode] = useState('canvas'); // 'canvas' | 'csv'
+  const [canvasUrl, setCanvasUrl] = useState(DEFAULT_CANVAS_URL);
+  const [canvasApiKey, setCanvasApiKey] = useState('');
+  const [savedCanvasConfig, setSavedCanvasConfig] = useState(false);
+  const [showCanvasKey, setShowCanvasKey] = useState(false);
+  const [canvasCourses, setCanvasCourses] = useState([]);
+  const [canvasAssignments, setCanvasAssignments] = useState([]);
+  const [selectedCourseId, setSelectedCourseId] = useState('');
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState('');
+  const [canvasLoading, setCanvasLoading] = useState('');   // '' | 'courses' | 'assignments' | 'fetch' | 'save'
+  const [canvasPreview, setCanvasPreview] = useState(null); // ผลจาก fetchPeerReviewData ก่อนบันทึก
 
   // Confirm modal state
   const [confirmModal, setConfirmModal] = useState({
@@ -178,57 +192,60 @@ export default function AdminPanel({ onViewData }) {
   };
 
   // Upload Peer Review CSV
+  // บันทึกผลวิเคราะห์ลง Firestore แบบ chunk — ใช้ร่วมทั้งเส้นทาง CSV และ Canvas
+  const savePeerReviewResult = async (result, sourceName) => {
+    // แบ่งข้อมูลออกเป็น chunks เพื่อหลีกเลี่ยง Firestore 1MB limit
+    const CHUNK_SIZE = 100; // จำนวน students/graders ต่อ chunk
+
+    // 1. Save metadata และ stats
+    const metaRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', 'meta');
+    await setDoc(metaRef, {
+      stats: result.stats,
+      uploadedAt: serverTimestamp(),
+      uploadedBy: currentUser.uid,
+      fileName: sourceName,
+      totalStudents: Object.keys(result.students).length,
+      totalGraders: Object.keys(result.graders).length
+    });
+
+    // 2. Save students in chunks
+    const studentEntries = Object.entries(result.students);
+    for (let i = 0; i < studentEntries.length; i += CHUNK_SIZE) {
+      const chunk = studentEntries.slice(i, i + CHUNK_SIZE);
+      const chunkObj = Object.fromEntries(chunk);
+      const chunkRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', `students_${Math.floor(i/CHUNK_SIZE)}`);
+      await setDoc(chunkRef, { data: chunkObj, chunkIndex: Math.floor(i/CHUNK_SIZE) });
+    }
+
+    // 3. Save graders in chunks
+    const graderEntries = Object.entries(result.graders);
+    for (let i = 0; i < graderEntries.length; i += CHUNK_SIZE) {
+      const chunk = graderEntries.slice(i, i + CHUNK_SIZE);
+      const chunkObj = Object.fromEntries(chunk);
+      const chunkRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', `graders_${Math.floor(i/CHUNK_SIZE)}`);
+      await setDoc(chunkRef, { data: chunkObj, chunkIndex: Math.floor(i/CHUNK_SIZE) });
+    }
+
+    // 4. Save reviews in chunks (reviews อาจใหญ่มาก)
+    const reviewChunkSize = 200;
+    for (let i = 0; i < result.reviews.length; i += reviewChunkSize) {
+      const chunk = result.reviews.slice(i, i + reviewChunkSize);
+      const chunkRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', `reviews_${Math.floor(i/reviewChunkSize)}`);
+      await setDoc(chunkRef, { data: chunk, chunkIndex: Math.floor(i/reviewChunkSize) });
+    }
+  };
+
   const handlePeerReviewUpload = async (event) => {
     const file = event.target.files?.[0];
     if (!file || !selectedSemester) return;
-    
+
     setUploading(true);
     setUploadError(null);
     setUploadSuccess(null);
-    
+
     try {
       const result = await parseCSV(file);
-      
-      // แบ่งข้อมูลออกเป็น chunks เพื่อหลีกเลี่ยง Firestore 1MB limit
-      const CHUNK_SIZE = 100; // จำนวน students/graders ต่อ chunk
-      
-      // 1. Save metadata และ stats
-      const metaRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', 'meta');
-      await setDoc(metaRef, {
-        stats: result.stats,
-        uploadedAt: serverTimestamp(),
-        uploadedBy: currentUser.uid,
-        fileName: file.name,
-        totalStudents: Object.keys(result.students).length,
-        totalGraders: Object.keys(result.graders).length
-      });
-      
-      // 2. Save students in chunks
-      const studentEntries = Object.entries(result.students);
-      for (let i = 0; i < studentEntries.length; i += CHUNK_SIZE) {
-        const chunk = studentEntries.slice(i, i + CHUNK_SIZE);
-        const chunkObj = Object.fromEntries(chunk);
-        const chunkRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', `students_${Math.floor(i/CHUNK_SIZE)}`);
-        await setDoc(chunkRef, { data: chunkObj, chunkIndex: Math.floor(i/CHUNK_SIZE) });
-      }
-      
-      // 3. Save graders in chunks
-      const graderEntries = Object.entries(result.graders);
-      for (let i = 0; i < graderEntries.length; i += CHUNK_SIZE) {
-        const chunk = graderEntries.slice(i, i + CHUNK_SIZE);
-        const chunkObj = Object.fromEntries(chunk);
-        const chunkRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', `graders_${Math.floor(i/CHUNK_SIZE)}`);
-        await setDoc(chunkRef, { data: chunkObj, chunkIndex: Math.floor(i/CHUNK_SIZE) });
-      }
-      
-      // 4. Save reviews in chunks (reviews อาจใหญ่มาก)
-      const reviewChunkSize = 200;
-      for (let i = 0; i < result.reviews.length; i += reviewChunkSize) {
-        const chunk = result.reviews.slice(i, i + reviewChunkSize);
-        const chunkRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', `reviews_${Math.floor(i/reviewChunkSize)}`);
-        await setDoc(chunkRef, { data: chunk, chunkIndex: Math.floor(i/reviewChunkSize) });
-      }
-      
+      await savePeerReviewResult(result, file.name);
       setUploadSuccess(`อัปโหลดข้อมูล Peer Review สำเร็จ! (${Object.keys(result.students).length} นักศึกษา, ${Object.keys(result.graders).length} graders)`);
     } catch (error) {
       console.error('Upload error:', error);
@@ -236,6 +253,122 @@ export default function AdminPanel({ onViewData }) {
     } finally {
       setUploading(false);
       event.target.value = '';
+    }
+  };
+
+  // ===== Canvas: โหลด config ที่เคยบันทึกไว้ (ต่อ user) =====
+  useEffect(() => {
+    if (!currentUser) return;
+    (async () => {
+      try {
+        const cfgSnap = await getDoc(doc(db, 'canvasConfigs', currentUser.uid));
+        if (cfgSnap.exists()) {
+          const cfg = cfgSnap.data();
+          if (cfg.canvasUrl) setCanvasUrl(cfg.canvasUrl);
+          if (cfg.canvasApiKey) {
+            setCanvasApiKey(cfg.canvasApiKey);
+            setSavedCanvasConfig(true);
+          }
+        }
+      } catch (err) {
+        console.error('โหลด Canvas config ไม่สำเร็จ:', err);
+      }
+    })();
+  }, [currentUser]);
+
+  const canvasConfig = () => ({
+    apiKey: canvasApiKey.trim(),
+    canvasUrl: (canvasUrl || DEFAULT_CANVAS_URL).trim().replace(/\/+$/, ''),
+  });
+
+  const handleSaveCanvasConfig = async () => {
+    if (!canvasApiKey.trim() || !canvasUrl.trim()) {
+      setUploadError('กรุณากรอก Canvas URL และ Access Token');
+      return;
+    }
+    setUploadError(null);
+    try {
+      await setDoc(doc(db, 'canvasConfigs', currentUser.uid), {
+        canvasUrl: canvasUrl.trim().replace(/\/+$/, ''),
+        canvasApiKey: canvasApiKey.trim(),
+        updatedAt: serverTimestamp(),
+      });
+      setSavedCanvasConfig(true);
+      setUploadSuccess('บันทึกการตั้งค่า Canvas แล้ว');
+    } catch (err) {
+      setUploadError(`บันทึก config ไม่สำเร็จ: ${err.message}`);
+    }
+  };
+
+  const handleLoadCourses = async () => {
+    setUploadError(null);
+    setCanvasLoading('courses');
+    try {
+      const courses = await fetchCourses(canvasConfig());
+      setCanvasCourses(courses);
+      if (courses.length === 0) setUploadError('ไม่พบวิชาที่คุณเป็นผู้สอน (ตรวจ token/สิทธิ์)');
+    } catch (err) {
+      setUploadError(`ดึงรายวิชาไม่สำเร็จ: ${err.message}`);
+    } finally {
+      setCanvasLoading('');
+    }
+  };
+
+  const handleSelectCourse = async (courseId) => {
+    setSelectedCourseId(courseId);
+    setSelectedAssignmentId('');
+    setCanvasAssignments([]);
+    setCanvasPreview(null);
+    if (!courseId) return;
+    setUploadError(null);
+    setCanvasLoading('assignments');
+    try {
+      const assignments = await fetchAssignments(canvasConfig(), courseId);
+      setCanvasAssignments(assignments);
+    } catch (err) {
+      setUploadError(`ดึง assignment ไม่สำเร็จ: ${err.message}`);
+    } finally {
+      setCanvasLoading('');
+    }
+  };
+
+  const handleCanvasFetch = async () => {
+    if (!selectedCourseId || !selectedAssignmentId) {
+      setUploadError('กรุณาเลือกวิชาและ assignment');
+      return;
+    }
+    setUploadError(null);
+    setUploadSuccess(null);
+    setCanvasPreview(null);
+    setCanvasLoading('fetch');
+    try {
+      const result = await fetchPeerReviewData(canvasConfig(), selectedCourseId, selectedAssignmentId);
+      setCanvasPreview(result);
+    } catch (err) {
+      console.error('Canvas fetch error:', err);
+      setUploadError(`ดึงข้อมูลจาก Canvas ไม่สำเร็จ: ${err.message}`);
+    } finally {
+      setCanvasLoading('');
+    }
+  };
+
+  const handleCanvasSave = async () => {
+    if (!canvasPreview || !selectedSemester) {
+      setUploadError('กรุณาเลือกเทอมและดึงข้อมูลก่อนบันทึก');
+      return;
+    }
+    setUploadError(null);
+    setCanvasLoading('save');
+    try {
+      const assignment = canvasAssignments.find(a => String(a.id) === String(selectedAssignmentId));
+      const sourceName = `Canvas: ${assignment ? assignment.name : selectedAssignmentId}`;
+      await savePeerReviewResult(canvasPreview, sourceName);
+      setUploadSuccess(`บันทึกข้อมูลจาก Canvas สำเร็จ! (${Object.keys(canvasPreview.students).length} นักศึกษา, ${Object.keys(canvasPreview.graders).length} graders)`);
+      setCanvasPreview(null);
+    } catch (err) {
+      setUploadError(`บันทึกไม่สำเร็จ: ${err.message}`);
+    } finally {
+      setCanvasLoading('');
     }
   };
 
@@ -685,62 +818,214 @@ export default function AdminPanel({ onViewData }) {
           </div>
 
           {selectedSemester && (
-            <div className="grid md:grid-cols-2 gap-6">
-              {/* Peer Review Upload */}
+            <div className="space-y-6">
+              {/* ===== Peer Review: ดึงจาก Canvas โดยตรง / อัปโหลด CSV ===== */}
               <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6">
-                <div className="w-12 h-12 bg-gradient-to-br from-cyan-500 to-purple-600 rounded-xl flex items-center justify-center mb-4">
-                  <Upload className="w-6 h-6" />
-                </div>
-                <h3 className="text-lg font-semibold mb-2">อัปโหลด Peer Review</h3>
-                <p className="text-slate-400 text-sm mb-4">ไฟล์ CSV จากระบบ Peer Review</p>
-                
-                {/* Link to CMU system */}
-                <a 
-                  href="http://10.110.3.252:8000/" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 text-purple-400 hover:text-purple-300 text-sm mb-4"
-                >
-                  🎓 ดึงข้อมูลจากระบบ มช. (ต้องใช้เน็ต มช.)
-                </a>
-                
-                <label className="cursor-pointer block">
-                  <input 
-                    type="file" 
-                    accept=".csv" 
-                    onChange={handlePeerReviewUpload} 
-                    className="hidden"
-                    disabled={uploading}
-                  />
-                  <div className={`px-4 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-center ${uploading ? 'opacity-50' : ''}`}>
-                    {uploading ? 'กำลังอัปโหลด...' : 'เลือกไฟล์ Peer Review'}
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-12 h-12 bg-gradient-to-br from-cyan-500 to-purple-600 rounded-xl flex items-center justify-center">
+                    <Cloud className="w-6 h-6" />
                   </div>
-                </label>
+                  <div>
+                    <h3 className="text-lg font-semibold">ข้อมูล Peer Review</h3>
+                    <p className="text-slate-400 text-sm">ดึงจาก Canvas โดยตรง หรืออัปโหลดไฟล์ CSV</p>
+                  </div>
+                </div>
+
+                {/* Mode toggle */}
+                <div className="inline-flex bg-slate-800 rounded-lg p-1 mb-5">
+                  <button
+                    onClick={() => setPeerReviewMode('canvas')}
+                    className={`px-4 py-2 rounded-md text-sm font-medium ${peerReviewMode === 'canvas' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                  >
+                    ดึงจาก Canvas
+                  </button>
+                  <button
+                    onClick={() => setPeerReviewMode('csv')}
+                    className={`px-4 py-2 rounded-md text-sm font-medium ${peerReviewMode === 'csv' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                  >
+                    อัปโหลด CSV
+                  </button>
+                </div>
+
+                {peerReviewMode === 'canvas' && (
+                  <div className="space-y-5">
+                    {/* 1) ตั้งค่า Canvas */}
+                    <div className="bg-slate-800/50 border border-white/10 rounded-xl p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-sm font-medium flex items-center gap-2">
+                          <Key className="w-4 h-4 text-cyan-400" /> ตั้งค่า Canvas
+                        </span>
+                        {savedCanvasConfig && (
+                          <span className="text-xs text-green-400 flex items-center gap-1">
+                            <CheckCircle2 className="w-4 h-4" /> บันทึกแล้ว
+                          </span>
+                        )}
+                      </div>
+                      <label className="block text-xs text-slate-400 mb-1">Canvas URL</label>
+                      <input
+                        type="text"
+                        value={canvasUrl}
+                        onChange={(e) => setCanvasUrl(e.target.value)}
+                        placeholder={DEFAULT_CANVAS_URL}
+                        className="w-full px-3 py-2 mb-3 bg-slate-900 border border-white/10 rounded-lg text-white text-sm"
+                      />
+                      <label className="block text-xs text-slate-400 mb-1">Access Token</label>
+                      <div className="relative mb-2">
+                        <input
+                          type={showCanvasKey ? 'text' : 'password'}
+                          value={canvasApiKey}
+                          onChange={(e) => setCanvasApiKey(e.target.value)}
+                          placeholder="วาง Canvas Access Token ที่นี่"
+                          className="w-full px-3 py-2 pr-10 bg-slate-900 border border-white/10 rounded-lg text-white text-sm"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowCanvasKey(!showCanvasKey)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                        >
+                          {showCanvasKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                        </button>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <a
+                          href={`${(canvasUrl || DEFAULT_CANVAS_URL).replace(/\/+$/, '')}/profile/settings`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs text-cyan-400 hover:text-cyan-300"
+                        >
+                          🔑 สร้าง Access Token (Account &gt; Settings)
+                        </a>
+                        <button
+                          onClick={handleSaveCanvasConfig}
+                          className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs flex items-center gap-1"
+                        >
+                          <Save className="w-3 h-3" /> บันทึก
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 2) เลือกวิชา + assignment */}
+                    <div>
+                      <button
+                        onClick={handleLoadCourses}
+                        disabled={canvasLoading === 'courses' || !canvasApiKey.trim()}
+                        className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm flex items-center gap-2 disabled:opacity-50 mb-3"
+                      >
+                        <RefreshCw className={`w-4 h-4 ${canvasLoading === 'courses' ? 'animate-spin' : ''}`} />
+                        {canvasCourses.length ? 'โหลดรายวิชาอีกครั้ง' : 'โหลดรายวิชา'}
+                      </button>
+
+                      {canvasCourses.length > 0 && (
+                        <div className="grid md:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">วิชา</label>
+                            <select
+                              value={selectedCourseId}
+                              onChange={(e) => handleSelectCourse(e.target.value)}
+                              className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm"
+                            >
+                              <option value="">-- เลือกวิชา --</option>
+                              {canvasCourses.map((c) => (
+                                <option key={c.id} value={c.id}>{c.name}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs text-slate-400 mb-1">
+                              Assignment {canvasLoading === 'assignments' && '(กำลังโหลด...)'}
+                            </label>
+                            <select
+                              value={selectedAssignmentId}
+                              onChange={(e) => { setSelectedAssignmentId(e.target.value); setCanvasPreview(null); }}
+                              disabled={!selectedCourseId || canvasLoading === 'assignments'}
+                              className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm disabled:opacity-50"
+                            >
+                              <option value="">-- เลือก assignment --</option>
+                              {canvasAssignments.map((a) => (
+                                <option key={a.id} value={a.id}>
+                                  {a.name}{a.hasRubric ? '' : ' (ไม่มี rubric)'}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* 3) ดึงข้อมูล */}
+                    {selectedAssignmentId && (
+                      <button
+                        onClick={handleCanvasFetch}
+                        disabled={canvasLoading === 'fetch'}
+                        className="px-4 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+                      >
+                        <Download className={`w-4 h-4 ${canvasLoading === 'fetch' ? 'animate-pulse' : ''}`} />
+                        {canvasLoading === 'fetch' ? 'กำลังดึงข้อมูลจาก Canvas...' : 'ดึงข้อมูล Peer Review'}
+                      </button>
+                    )}
+
+                    {/* 4) Preview + บันทึก */}
+                    {canvasPreview && (
+                      <div className="bg-slate-800/50 border border-cyan-500/30 rounded-xl p-4">
+                        <p className="text-sm font-medium mb-2 text-cyan-300">ผลที่ดึงมา (ยังไม่บันทึก)</p>
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-4">
+                          <div><span className="text-slate-400">นักศึกษา:</span> {Object.keys(canvasPreview.students).length}</div>
+                          <div><span className="text-slate-400">Graders:</span> {Object.keys(canvasPreview.graders).length}</div>
+                          <div><span className="text-slate-400">Reviews:</span> {canvasPreview.stats.totalReviews}</div>
+                          <div><span className="text-slate-400">ทำเสร็จ:</span> {canvasPreview.stats.completedReviews}</div>
+                        </div>
+                        <button
+                          onClick={handleCanvasSave}
+                          disabled={canvasLoading === 'save'}
+                          className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
+                        >
+                          <Save className="w-4 h-4" />
+                          {canvasLoading === 'save' ? 'กำลังบันทึก...' : 'บันทึกเข้าเทอมนี้'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {peerReviewMode === 'csv' && (
+                  <label className="cursor-pointer block max-w-md">
+                    <input
+                      type="file"
+                      accept=".csv"
+                      onChange={handlePeerReviewUpload}
+                      className="hidden"
+                      disabled={uploading}
+                    />
+                    <div className={`px-4 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-center ${uploading ? 'opacity-50' : ''}`}>
+                      {uploading ? 'กำลังอัปโหลด...' : 'เลือกไฟล์ Peer Review (CSV)'}
+                    </div>
+                  </label>
+                )}
               </div>
 
               {/* Student Data Upload */}
-              <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6">
+              <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6 max-w-md">
                 <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-teal-600 rounded-xl flex items-center justify-center mb-4">
                   <Users className="w-6 h-6" />
                 </div>
                 <h3 className="text-lg font-semibold mb-2">อัปโหลดข้อมูลนักศึกษา</h3>
                 <p className="text-slate-400 text-sm mb-4">ไฟล์ CSV ที่มีข้อมูล Group</p>
-                
+
                 {/* Link to Group Exporter */}
-                <a 
-                  href="https://canvas-group-exporter.vercel.app/" 
-                  target="_blank" 
+                <a
+                  href="https://canvas-group-exporter.vercel.app/"
+                  target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 text-cyan-400 hover:text-cyan-300 text-sm mb-4"
                 >
                   🔗 สร้างไฟล์จาก Canvas Group Exporter
                 </a>
-                
+
                 <label className="cursor-pointer block">
-                  <input 
-                    type="file" 
-                    accept=".csv" 
-                    onChange={handleStudentDataUpload} 
+                  <input
+                    type="file"
+                    accept=".csv"
+                    onChange={handleStudentDataUpload}
                     className="hidden"
                     disabled={uploading}
                   />

@@ -95,13 +95,14 @@ export function parseCSV(input) {
             reject(new Error('ไม่พบข้อมูลในไฟล์ CSV'));
             return;
           }
-          
+
           const headers = Object.keys(results.data[0] || {});
           console.log('=== CSV Debug ===');
           console.log('Total rows:', results.data.length);
           console.log('Headers:', headers);
-          
-          const parsedData = processCSVData(results.data, headers);
+
+          const reviewRows = mapCSVToReviewRows(results.data, headers);
+          const parsedData = buildAnalysis(reviewRows);
           resolve(parsedData);
         } catch (err) {
           console.error('Parse error:', err);
@@ -113,53 +114,79 @@ export function parseCSV(input) {
   });
 }
 
-function processCSVData(rawData, headers) {
+// แปลงแถว CSV ดิบ -> reviewRows แบบ normalized (ไม่พึ่งตำแหน่งคอลัมน์อีกในขั้น aggregate)
+function mapCSVToReviewRows(rawData, headers) {
+  const colIndex = detectColumns(headers);
+  console.log('Column mapping:', colIndex);
+
+  return rawData.map(row => {
+    const gradeGivenStr = row[colIndex.reviewCompleted] || '';
+    const gradeAverageStr = row[colIndex.gradeAverage] || '';
+    const gg = gradeGivenStr !== '' ? parseFloat(gradeGivenStr) : null;
+    const ga = gradeAverageStr !== '' ? parseFloat(gradeAverageStr) : null;
+
+    return {
+      studentName: (row[colIndex.studentName] || '').trim(),
+      graderName: (row[colIndex.reviewAssigned] || '').trim(),
+      gradeGiven: (gg !== null && !isNaN(gg)) ? gg : null,
+      gradeAverage: (ga !== null && !isNaN(ga)) ? ga : null,
+      submissionComments: row[colIndex.submissionComments] || '',
+      comments: {
+        criteria_1: (row[colIndex.criteria1] || '').trim(),
+        criteria_2: (row[colIndex.criteria2] || '').trim(),
+        criteria_3: (row[colIndex.criteria3] || '').trim(),
+        criteria_5: (row[colIndex.criteria5] || '').trim(),
+        criteria_6: (row[colIndex.criteria6] || '').trim(),
+        criteria_7: (row[colIndex.criteria7] || '').trim(),
+        criteria_10: (row[colIndex.criteria10] || '').trim(),
+        criteria_11: (row[colIndex.criteria11] || '').trim(),
+        criteria_8: (row[colIndex.criteria8] || '').trim()
+      }
+    };
+  });
+}
+
+/**
+ * แกนกลางการวิเคราะห์ — ใช้ร่วมกันทั้งเส้นทาง CSV และ Canvas API
+ * @param {Array<{studentName, graderName, gradeGiven:number|null, gradeAverage:number|null,
+ *   submissionComments:string, comments:{criteria_x:string}}>} reviewRows
+ * โครงสร้างผลลัพธ์ { reviews, students, graders, stats } เหมือนเดิมทุกอย่าง
+ */
+export function buildAnalysis(reviewRows) {
   const reviews = [];
   const students = {};  // เจ้าของงาน (Student Name)
   const graders = {};   // คนรีวิว (Review assigned)
-  
-  const colIndex = detectColumns(headers);
-  console.log('Column mapping:', colIndex);
-  
-  // Debug: แสดงตัวอย่างข้อมูลแถวแรก
-  if (rawData.length > 0) {
-    const firstRow = rawData[0];
-    console.log('=== Debug First Row ===');
-    console.log('Student Name (owner):', firstRow[colIndex.studentName]);
-    console.log('Review Assigned (grader):', firstRow[colIndex.reviewAssigned]);
-    console.log('Review Completed (grade):', firstRow[colIndex.reviewCompleted]);
-  }
 
-  rawData.forEach((row, index) => {
-    // *** ความเข้าใจใหม่ตาม Canvas ***
+  reviewRows.forEach((row, index) => {
     // Student Name = เจ้าของงาน (คนที่ถูกรีวิว)
-    // Review assigned = ชื่อ Grader ที่ถูก assign มารีวิวงานของ Student
-    const studentName = (row[colIndex.studentName] || '').trim();
-    const graderName = (row[colIndex.reviewAssigned] || '').trim();
-    
-    const gradeGivenStr = row[colIndex.reviewCompleted] || '';
-    const gradeAverageStr = row[colIndex.gradeAverage] || '';
-    const submissionComments = row[colIndex.submissionComments] || '';
-    
+    // graderName = ชื่อ Grader ที่ถูก assign มารีวิวงานของ Student
+    const studentName = (row.studentName || '').trim();
+    const graderName = (row.graderName || '').trim();
+
+    const submissionComments = row.submissionComments || '';
+
     if (!studentName) return;
 
     const studentInfo = parseStudentName(studentName);
     const graderInfo = parseStudentName(graderName);
-    
-    const gradeGiven = gradeGivenStr !== '' ? parseFloat(gradeGivenStr) : null;
-    const gradeAverage = gradeAverageStr !== '' ? parseFloat(gradeAverageStr) : null;
-    const isCompleted = gradeGiven !== null && !isNaN(gradeGiven);
 
+    const gradeGiven = (row.gradeGiven !== null && row.gradeGiven !== undefined && !isNaN(row.gradeGiven))
+      ? row.gradeGiven : null;
+    const gradeAverage = (row.gradeAverage !== null && row.gradeAverage !== undefined && !isNaN(row.gradeAverage))
+      ? row.gradeAverage : null;
+    const isCompleted = gradeGiven !== null;
+
+    const c = row.comments || {};
     const comments = {
-      criteria_1: (row[colIndex.criteria1] || '').trim(),
-      criteria_2: (row[colIndex.criteria2] || '').trim(),
-      criteria_3: (row[colIndex.criteria3] || '').trim(),
-      criteria_5: (row[colIndex.criteria5] || '').trim(),
-      criteria_6: (row[colIndex.criteria6] || '').trim(),
-      criteria_7: (row[colIndex.criteria7] || '').trim(),
-      criteria_10: (row[colIndex.criteria10] || '').trim(),
-      criteria_11: (row[colIndex.criteria11] || '').trim(),
-      criteria_8: (row[colIndex.criteria8] || '').trim()
+      criteria_1: (c.criteria_1 || '').trim(),
+      criteria_2: (c.criteria_2 || '').trim(),
+      criteria_3: (c.criteria_3 || '').trim(),
+      criteria_5: (c.criteria_5 || '').trim(),
+      criteria_6: (c.criteria_6 || '').trim(),
+      criteria_7: (c.criteria_7 || '').trim(),
+      criteria_10: (c.criteria_10 || '').trim(),
+      criteria_11: (c.criteria_11 || '').trim(),
+      criteria_8: (c.criteria_8 || '').trim()
     };
 
     const commentAnalysis = {};
