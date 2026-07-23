@@ -1,4 +1,7 @@
 // src/firebase.js
+// NOTE: Firebase config comes from Vite build-time env (VITE_FIREBASE_*).
+// These must be set for BOTH Production and Preview in Vercel, otherwise the
+// app crashes on load with auth/invalid-api-key (blank page).
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, EmailAuthProvider } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';

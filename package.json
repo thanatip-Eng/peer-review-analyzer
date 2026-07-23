@@ -1,6 +1,6 @@
 {
   "name": "peer-review-analyzer",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "ระบบวิเคราะห์คุณภาพการทำ Peer Review สำหรับนักศึกษา",
   "private": true,
   "type": "module",
