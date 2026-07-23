@@ -1,28 +1,22 @@
 // src/firebase.js
-// NOTE: Firebase config comes from Vite build-time env (VITE_FIREBASE_*).
-// These must be set for BOTH Production and Preview in Vercel, otherwise the
-// app crashes on load with auth/invalid-api-key (blank page).
+// Firebase web config. Prefers Vite build-time env (VITE_FIREBASE_*) when
+// provided, and falls back to the project's public config so the app works
+// even if the Vercel env vars are not injected into the build.
+// NOTE: Firebase web config values are NOT secrets — they ship to the browser
+// by design. Access is protected by Firestore Security Rules + Authorized
+// domains, not by hiding these values.
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, EmailAuthProvider } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyAaI0tzBul3syokJVMpubHjcppdWSVsCOE',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'peer-review-analyzer.firebaseapp.com',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'peer-review-analyzer',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'peer-review-analyzer.firebasestorage.app',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '365548948350',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:365548948350:web:dfb87c679c94683c60812f'
 };
-
-// Fail loudly (in console) instead of a silent blank page when the build
-// did not receive the VITE_FIREBASE_* env vars.
-if (!firebaseConfig.apiKey) {
-  console.error(
-    '[firebase] Missing VITE_FIREBASE_* env vars at build time. ' +
-      'Set them in Vercel for all environments and redeploy without build cache.'
-  );
-}
 
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
