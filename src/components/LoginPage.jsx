@@ -187,18 +187,9 @@ export default function LoginPage() {
         <div className="mt-6 text-center text-sm text-slate-500">
           <p>เครื่องมือเสริม:</p>
           <div className="flex justify-center gap-4 mt-2">
-            <a 
-              href="http://10.110.3.252:8000/" 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="text-purple-400 hover:text-purple-300"
-            >
-              ระบบดึงคะแนน (มช.)
-            </a>
-            <span className="text-slate-600">|</span>
-            <a 
-              href="https://canvas-group-exporter.vercel.app/" 
-              target="_blank" 
+            <a
+              href="https://canvas-group-exporter.vercel.app/"
+              target="_blank"
               rel="noopener noreferrer"
               className="text-cyan-400 hover:text-cyan-300"
             >
