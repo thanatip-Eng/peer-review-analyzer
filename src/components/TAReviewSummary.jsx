@@ -45,11 +45,11 @@ export default function TAReviewSummary({ semesterId, groupData, selectedGroupSe
     fetchData();
   }, [semesterId]);
 
-  // Get student's group
+  // Get student's group — โครงสร้าง groupData: { [studentId]: { studentName, section, [groupSet]: groupName } }
   const getStudentGroup = (studentId) => {
-    if (!groupData || !selectedGroupSet) return null;
-    const student = Object.values(groupData).find(s => s.studentId === studentId);
-    return student?.groups?.[selectedGroupSet] || null;
+    if (!groupData || !selectedGroupSet || !studentId) return null;
+    const student = groupData[studentId];
+    return student ? (student[selectedGroupSet] || null) : null;
   };
 
   // Get all unique groups
@@ -57,8 +57,7 @@ export default function TAReviewSummary({ semesterId, groupData, selectedGroupSe
     if (!groupData || !selectedGroupSet) return [];
     const groups = new Set();
     Object.values(groupData).forEach(s => {
-      const g = s.groups?.[selectedGroupSet];
-      if (g) groups.add(g);
+      if (s && s[selectedGroupSet]) groups.add(s[selectedGroupSet]);
     });
     return Array.from(groups).sort();
   }, [groupData, selectedGroupSet]);
