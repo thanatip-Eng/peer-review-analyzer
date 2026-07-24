@@ -379,6 +379,7 @@ export default function AdminPanel({ onViewData }) {
         courseName,
         assignmentName,
         source: 'canvas',
+        canvasUrl: canvasConfig().canvasUrl,
         canvasCourseId: String(selectedCourseId),
         canvasAssignmentId: String(selectedAssignmentId),
         maxScore: meta.maxScore ?? null,

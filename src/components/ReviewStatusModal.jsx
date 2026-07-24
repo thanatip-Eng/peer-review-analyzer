@@ -10,6 +10,7 @@ const STATUS_OPTIONS = [
   { value: 'reviewed', label: 'ตรวจสอบแล้ว', color: 'text-green-400', bg: 'bg-green-900/30' },
   { value: 'fixed', label: 'แก้ไขแล้ว', color: 'text-cyan-400', bg: 'bg-cyan-900/30' },
   { value: 'escalated', label: 'ส่งต่อ Admin', color: 'text-yellow-400', bg: 'bg-yellow-900/30' },
+  { value: 'resolved', label: 'ปิดงานแล้ว', color: 'text-purple-400', bg: 'bg-purple-900/30' },
 ];
 
 export function getStatusInfo(status) {
@@ -28,9 +29,10 @@ export default function ReviewStatusModal({
   currentStatus,
   onStatusUpdate
 }) {
-  const { currentUser, userData } = useAuth();
+  const { currentUser, userData, isAdmin } = useAuth();
   const [status, setStatus] = useState(currentStatus?.status || 'pending');
   const [note, setNote] = useState(currentStatus?.note || '');
+  const [adminReply, setAdminReply] = useState(currentStatus?.adminReply || '');
   const [loading, setSaving] = useState(false);
   const [history, setHistory] = useState([]);
 
@@ -38,6 +40,7 @@ export default function ReviewStatusModal({
     if (isOpen && currentStatus) {
       setStatus(currentStatus.status || 'pending');
       setNote(currentStatus.note || '');
+      setAdminReply(currentStatus.adminReply || '');
       setHistory(currentStatus.history || []);
     }
   }, [isOpen, currentStatus]);
@@ -63,23 +66,37 @@ export default function ReviewStatusModal({
       };
       
       const newHistory = [...existingHistory, newHistoryEntry].slice(-10); // Keep last 10 entries
-      
+
+      // ฟิลด์คำตอบกลับของ Admin (แก้ได้เฉพาะ Admin) — สื่อสารสองทางกับ TA
+      const adminReplyChanged = isAdmin && adminReply !== (existingData.adminReply || '');
+      const adminFields = adminReplyChanged
+        ? {
+            adminReply,
+            adminReplyBy: currentUser.uid,
+            adminReplyByName: userData?.displayName || currentUser.email,
+            adminReplyAt: new Date().toISOString(),
+          }
+        : {};
+
       await setDoc(statusRef, {
         itemType,
         itemId,
         itemName,
         status,
         note,
+        ...(isAdmin ? { adminReply } : {}),
+        ...adminFields,
         history: newHistory,
         updatedBy: currentUser.uid,
         updatedByEmail: currentUser.email,
         updatedByName: userData?.displayName || currentUser.email,
         updatedAt: serverTimestamp()
-      });
-      
+      }, { merge: true });
+
       onStatusUpdate && onStatusUpdate({
         status,
         note,
+        ...(isAdmin ? { adminReply } : {}),
         history: newHistory,
         updatedByName: userData?.displayName || currentUser.email
       });
@@ -149,6 +166,37 @@ export default function ReviewStatusModal({
               className="w-full px-4 py-3 bg-slate-800 border border-white/10 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-cyan-500"
             />
           </div>
+
+          {/* Admin reply — Admin/อาจารย์ ตอบกลับ TA และปิดงานได้ (สื่อสารสองทาง) */}
+          {(isAdmin || currentStatus?.adminReply) && (
+            <div>
+              <label className="block text-sm text-slate-400 mb-2">คำตอบจาก Admin/อาจารย์</label>
+              {isAdmin ? (
+                <>
+                  <textarea
+                    value={adminReply}
+                    onChange={(e) => setAdminReply(e.target.value)}
+                    placeholder="ตอบกลับ TA / ระบุการตัดสินใจ..."
+                    rows={2}
+                    className="w-full px-4 py-3 bg-purple-900/10 border border-purple-500/20 rounded-xl text-white placeholder-slate-500 focus:outline-none focus:border-purple-500"
+                  />
+                  {status !== 'resolved' && (
+                    <button
+                      type="button"
+                      onClick={() => setStatus('resolved')}
+                      className="mt-2 text-xs px-3 py-1.5 bg-purple-700 hover:bg-purple-600 rounded-lg flex items-center gap-1"
+                    >
+                      <CheckCircle2 className="w-3 h-3" /> ทำเครื่องหมายปิดงาน (resolved)
+                    </button>
+                  )}
+                </>
+              ) : (
+                <p className="bg-purple-900/20 border border-purple-500/20 rounded-lg p-3 text-sm text-purple-200 whitespace-pre-wrap">
+                  {currentStatus.adminReply}
+                </p>
+              )}
+            </div>
+          )}
 
           {/* History */}
           {history.length > 0 && (

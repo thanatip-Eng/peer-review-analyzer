@@ -246,6 +246,8 @@ export async function fetchPeerReviewData(config, courseId, assignmentId) {
         comments,
         ownerLate: ownerLate.late,
         ownerSecondsLate: ownerLate.secondsLate,
+        ownerCanvasId: ownerId,     // Canvas user id (ไว้ลิงก์ SpeedGrader)
+        graderCanvasId: assessorId,
       };
     })
     .filter(Boolean);

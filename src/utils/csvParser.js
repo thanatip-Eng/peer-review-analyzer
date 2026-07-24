@@ -244,6 +244,7 @@ export function buildAnalysis(reviewRows, options = {}) {
         workScore: { average: 0, min: null, max: null, stdDev: 0, grades: [], graderCount: 0, isReliable: false },
         submittedLate: false,
         secondsLate: 0,
+        canvasUserId: row.ownerCanvasId ?? null,
         flags: []
       };
     }
@@ -275,6 +276,7 @@ export function buildAnalysis(reviewRows, options = {}) {
           reviewsMade: [],
           peerReviewScore: { fullScore: 0, earnedScore: 0, penalty: 0, netScore: 0, details: [] },
           allKeywords: [],
+          canvasUserId: row.graderCanvasId ?? null,
           flags: []
         };
       }

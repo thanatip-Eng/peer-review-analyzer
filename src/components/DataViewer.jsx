@@ -9,7 +9,7 @@ import TAReviewSummary from './TAReviewSummary';
 import { 
   Users, Search, Download, ChevronRight, AlertCircle, CheckCircle2, 
   XCircle, AlertTriangle, UserCheck, BarChart2, FileText, ClipboardList, Filter,
-  MessageSquare, ChevronDown
+  MessageSquare, ChevronDown, ExternalLink
 } from 'lucide-react';
 
 export default function DataViewer({ semesterId, taAssignment }) {
@@ -20,6 +20,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
   const [selectedGroupSet, setSelectedGroupSet] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [semesterMeta, setSemesterMeta] = useState(null); // ข้อมูลรายการ (canvasUrl/courseId/assignmentId ไว้สร้างลิงก์)
   
   // UI state
   const [activeTab, setActiveTab] = useState('overview');
@@ -63,6 +64,13 @@ export default function DataViewer({ semesterId, taAssignment }) {
       setError(null);
       
       try {
+        // Fetch รายการ (semester doc) เพื่อเอา canvasUrl/courseId/assignmentId ไว้สร้างลิงก์
+        try {
+          const semRef = doc(db, 'semesters', semesterId);
+          const semSnap = await getDoc(semRef);
+          setSemesterMeta(semSnap.exists() ? semSnap.data() : null);
+        } catch { setSemesterMeta(null); }
+
         // Fetch metadata first
         const metaRef = doc(db, 'semesters', semesterId, 'peerReviewData', 'meta');
         const metaSnap = await getDoc(metaRef);
@@ -155,6 +163,19 @@ export default function DataViewer({ semesterId, taAssignment }) {
     });
     return Array.from(groups).sort();
   }, [groupData, selectedGroupSet]);
+
+  // ลิงก์ไปดูงานของนักศึกษาใน Canvas (SpeedGrader) — ใช้ได้เมื่อดึงจาก Canvas
+  const getCanvasLink = useCallback((canvasUserId) => {
+    const m = semesterMeta;
+    if (!m?.canvasUrl || !m.canvasCourseId || !m.canvasAssignmentId || !canvasUserId) return null;
+    return `${m.canvasUrl.replace(/\/+$/, '')}/courses/${m.canvasCourseId}/gradebook/speed_grader?assignment_id=${m.canvasAssignmentId}&student_id=${canvasUserId}`;
+  }, [semesterMeta]);
+
+  // จำนวนงานที่ TA ส่งต่อ Admin (ยังไม่ปิด) — ไว้โชว์ badge
+  const escalatedCount = useMemo(
+    () => Object.values(reviewStatuses).filter(s => s?.status === 'escalated').length,
+    [reviewStatuses]
+  );
 
   // Allowed groups for TA
   const allowedGroups = useMemo(() => {
@@ -502,19 +523,24 @@ export default function DataViewer({ semesterId, taAssignment }) {
           { id: 'overview', label: 'ภาพรวม', icon: BarChart2 },
           { id: 'students', label: 'คะแนนชิ้นงาน', icon: Users },
           { id: 'graders', label: 'คะแนน Peer Review', icon: UserCheck },
-          { id: 'admin', label: 'ตรวจสอบ', icon: AlertTriangle },
-          ...(isAdmin ? [{ id: 'tasummary', label: 'สรุปการตรวจสอบ', icon: MessageSquare }] : []),
+          { id: 'admin', label: 'ตรวจสอบ', icon: AlertTriangle, badge: escalatedCount },
+          ...(isAdmin ? [{ id: 'tasummary', label: 'สรุปการตรวจสอบ', icon: MessageSquare, badge: escalatedCount }] : []),
         ].map(tab => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`flex items-center gap-2 px-4 py-3 rounded-lg transition whitespace-nowrap ${
+            className={`relative flex items-center gap-2 px-4 py-3 rounded-lg transition whitespace-nowrap ${
               activeTab === tab.id
                 ? 'bg-gradient-to-r from-cyan-500/20 to-purple-500/20 text-white border border-white/10'
                 : 'text-slate-400 hover:text-white hover:bg-white/5'
             }`}
           >
             <tab.icon className="w-5 h-5" /> {tab.label}
+            {tab.badge > 0 && (
+              <span className="ml-1 min-w-5 h-5 px-1.5 inline-flex items-center justify-center bg-yellow-500 text-black text-xs font-bold rounded-full">
+                {tab.badge}
+              </span>
+            )}
           </button>
         ))}
       </div>
@@ -736,18 +762,31 @@ export default function DataViewer({ semesterId, taAssignment }) {
                         }
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <button
-                          onClick={() => setStatusModal({
-                            isOpen: true,
-                            itemType: 'student',
-                            itemId: student.studentId,
-                            itemName: student.fullName,
-                            currentStatus: itemStatus
-                          })}
-                          className={`px-2 py-1 rounded text-xs ${statusInfo.bg} ${statusInfo.color} hover:opacity-80 transition`}
-                        >
-                          {statusInfo.label}
-                        </button>
+                        <div className="flex items-center justify-center gap-2">
+                          <button
+                            onClick={() => setStatusModal({
+                              isOpen: true,
+                              itemType: 'student',
+                              itemId: student.studentId,
+                              itemName: student.fullName,
+                              currentStatus: itemStatus
+                            })}
+                            className={`px-2 py-1 rounded text-xs ${statusInfo.bg} ${statusInfo.color} hover:opacity-80 transition`}
+                          >
+                            {statusInfo.label}
+                          </button>
+                          {getCanvasLink(student.canvasUserId) && (
+                            <a
+                              href={getCanvasLink(student.canvasUserId)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="เปิดงานใน Canvas (SpeedGrader)"
+                              className="text-cyan-400 hover:text-cyan-300"
+                            >
+                              <ExternalLink className="w-4 h-4" />
+                            </a>
+                          )}
+                        </div>
                       </td>
                     </tr>
                     );
