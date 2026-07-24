@@ -387,9 +387,23 @@ export default function AdminPanel({ onViewData }) {
 
       await savePeerReviewResult(canvasPreview, semesterId, `Canvas: ${assignmentName}`);
 
+      // บันทึกข้อมูลกลุ่มที่ดึงมาอัตโนมัติ (ให้ TA เห็นเฉพาะกลุ่มตัวเอง) โดยไม่ต้องใช้ Group Exporter
+      const gd = canvasPreview.groupData;
+      let groupMsg = '';
+      if (gd && gd.groupSets && gd.groupSets.length > 0) {
+        await setDoc(doc(db, 'semesters', semesterId, 'studentData', 'main'), {
+          groups: gd.groups,
+          groupSets: gd.groupSets,
+          uploadedAt: serverTimestamp(),
+          uploadedBy: currentUser.uid,
+          fileName: 'Canvas (auto)',
+        });
+        groupMsg = `, กลุ่ม ${Object.keys(gd.groups).length} คน (${gd.groupSets.join(', ')})`;
+      }
+
       await fetchSemesters();
       setSelectedSemester(semesterId);
-      setUploadSuccess(`บันทึกจาก Canvas สำเร็จ! สร้างรายการ "${semesterName}" (${Object.keys(canvasPreview.students).length} นักศึกษา, ${Object.keys(canvasPreview.graders).length} graders)`);
+      setUploadSuccess(`บันทึกจาก Canvas สำเร็จ! สร้างรายการ "${semesterName}" (${Object.keys(canvasPreview.students).length} นักศึกษา, ${Object.keys(canvasPreview.graders).length} graders${groupMsg})`);
       setCanvasPreview(null);
     } catch (err) {
       setUploadError(`บันทึกไม่สำเร็จ: ${err.message}`);
@@ -997,7 +1011,12 @@ export default function AdminPanel({ onViewData }) {
                           ผลที่ดึงมา (ยังไม่บันทึก){canvasPreview.meta?.assignmentName ? ` — ${canvasPreview.meta.assignmentName}` : ''}
                         </p>
                         {canvasPreview.meta?.maxScore != null && (
-                          <p className="text-xs text-slate-400 mb-3">คะแนนเต็มงาน: {canvasPreview.meta.maxScore}</p>
+                          <p className="text-xs text-slate-400 mb-1">คะแนนเต็มงาน: {canvasPreview.meta.maxScore}</p>
+                        )}
+                        {canvasPreview.groupData?.groupSets?.length > 0 && (
+                          <p className="text-xs text-slate-400 mb-3">
+                            📁 กลุ่ม (auto): {canvasPreview.groupData.groupSets.join(', ')} — {Object.keys(canvasPreview.groupData.groups).length} คน
+                          </p>
                         )}
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-3">
                           <div><span className="text-slate-400">นักศึกษา:</span> {Object.keys(canvasPreview.students).length}</div>

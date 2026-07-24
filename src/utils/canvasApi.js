@@ -59,6 +59,47 @@ export async function fetchAssignments(config, courseId) {
     .sort((a, b) => Number(b.id) - Number(a.id));
 }
 
+/**
+ * ดึงข้อมูลกลุ่มของคอร์สจาก Canvas แล้วสร้างโครงสร้างเดียวกับที่ studentData ใช้:
+ *   groups = { [sisUserId]: { studentName, section, [groupSetName]: groupName } }
+ *   groupSets = [groupSetName, ...]
+ * เพื่อให้ TA เห็นเฉพาะกลุ่มตัวเองได้เหมือนตอนอัปโหลดจาก Group Exporter
+ * best-effort: ถ้าคอร์สไม่มีกลุ่ม/สิทธิ์ไม่พอ จะคืน { groups:{}, groupSets:[] }
+ */
+async function buildGroupData(config, courseId, userInfo) {
+  const categories = await callProxy(config, 'group-categories', { courseId });
+  const catName = {};
+  (categories || []).forEach((c) => { if (c && c.id != null) catName[c.id] = c.name || `Group Set ${c.id}`; });
+
+  const groupsList = await callProxy(config, 'course-groups', { courseId });
+  const validGroups = (groupsList || []).filter((g) => g && g.id != null);
+  if (validGroups.length === 0) return { groups: {}, groupSets: [] };
+
+  // ดึงสมาชิกแต่ละกลุ่มพร้อมกัน
+  const memberships = await Promise.all(
+    validGroups.map((g) =>
+      callProxy(config, 'group-memberships', { groupId: g.id })
+        .then((m) => ({ group: g, members: m || [] }))
+        .catch(() => ({ group: g, members: [] }))
+    )
+  );
+
+  const groups = {};
+  const groupSetSet = new Set();
+  memberships.forEach(({ group, members }) => {
+    const setName = catName[group.group_category_id] || 'กลุ่ม';
+    members.forEach((mem) => {
+      const info = userInfo[mem.user_id];
+      if (!info || !info.sisId) return;
+      if (!groups[info.sisId]) groups[info.sisId] = { studentName: info.name, section: '' };
+      groups[info.sisId][setName] = group.name || `กลุ่ม ${group.id}`;
+      groupSetSet.add(setName);
+    });
+  });
+
+  return { groups, groupSets: Array.from(groupSetSet) };
+}
+
 // สร้างชื่อในรูปแบบ "<รหัสนักศึกษา> <ชื่อ-สกุล>" ให้ตรงกับที่ parseStudentName แยก studentId ได้
 function formatName(user) {
   if (!user) return '';
@@ -101,8 +142,15 @@ export async function fetchPeerReviewData(config, courseId, assignmentId) {
   // 2) users -> map userId -> ชื่อ (รวมทั้งเจ้าของงานและผู้รีวิว)
   const users = await callProxy(config, 'users', { courseId });
   const userMap = {};
+  const userInfo = {}; // userId -> { sisId, name } (ใช้สร้างข้อมูลกลุ่ม)
   (users || []).forEach((u) => {
-    if (u && u.id != null) userMap[u.id] = formatName(u);
+    if (u && u.id != null) {
+      userMap[u.id] = formatName(u);
+      userInfo[u.id] = {
+        sisId: (u.sis_user_id || u.login_id || '').toString().trim(),
+        name: (u.sortable_name || u.name || '').toString().trim(),
+      };
+    }
   });
 
   // 3) submissions -> map submissionId -> owner + เก็บ submission_comments แยกตามผู้เขียน
@@ -214,5 +262,14 @@ export async function fetchPeerReviewData(config, courseId, assignmentId) {
     maxScore,
     pointsPossible: assignment?.points_possible ?? null,
   };
+
+  // ดึงข้อมูลกลุ่มอัตโนมัติ (best-effort — ไม่ให้ล้มทั้งกระบวนการถ้ากลุ่มมีปัญหา)
+  try {
+    analysis.groupData = await buildGroupData(config, courseId, userInfo);
+  } catch (e) {
+    console.warn('ดึงข้อมูลกลุ่มไม่สำเร็จ:', e.message);
+    analysis.groupData = { groups: {}, groupSets: [] };
+  }
+
   return analysis;
 }

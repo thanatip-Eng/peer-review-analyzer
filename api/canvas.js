@@ -52,8 +52,14 @@ async function canvasFetch(baseUrl, path, apiKey) {
 }
 
 function buildPath(resource, q) {
-  const { courseId, assignmentId, rubricId } = q;
+  const { courseId, assignmentId, rubricId, groupId } = q;
   switch (resource) {
+    case 'group-categories':
+      return `/api/v1/courses/${courseId}/group_categories?per_page=100`;
+    case 'course-groups':
+      return `/api/v1/courses/${courseId}/groups?per_page=100`;
+    case 'group-memberships':
+      return `/api/v1/groups/${groupId}/memberships?per_page=100`;
     case 'courses':
       return `/api/v1/courses?enrollment_type=teacher&state[]=available&per_page=100`;
     case 'assignments':
