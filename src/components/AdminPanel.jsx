@@ -20,7 +20,7 @@ import { parseCSV } from '../utils/csvParser';
 import { fetchCourses, fetchAssignments, fetchPeerReviewData, DEFAULT_CANVAS_URL } from '../utils/canvasApi';
 import ConfirmModal from './ConfirmModal';
 import Papa from 'papaparse';
-import { Upload, Users, UserPlus, Settings, Trash2, Edit, Save, X, ChevronRight, CheckCircle2, AlertTriangle, Eye, EyeOff, Mail, Lock, Key, Cloud, Download, RefreshCw } from 'lucide-react';
+import { Upload, Users, UserPlus, Settings, Trash2, Edit, Save, X, ChevronRight, CheckCircle2, AlertTriangle, Eye, EyeOff, Mail, Lock, Key, Cloud, Download, RefreshCw, Clock } from 'lucide-react';
 
 export default function AdminPanel({ onViewData }) {
   const { currentUser } = useAuth();
@@ -34,6 +34,7 @@ export default function AdminPanel({ onViewData }) {
   // TAs state
   const [tas, setTAs] = useState([]);
   const [loadingTAs, setLoadingTAs] = useState(true);
+  const [pendingUsers, setPendingUsers] = useState([]); // ผู้ที่ login แล้วรออนุมัติ (role=pending)
   const [newTA, setNewTA] = useState({
     email: '',
     password: '',
@@ -95,6 +96,17 @@ export default function AdminPanel({ onViewData }) {
     }
   }, [selectedSemester]);
 
+  // ดึงผู้ใช้ที่ login แล้วรออนุมัติ (role = pending) เพื่อให้ Admin กดอนุมัติได้เลย
+  const fetchPendingUsers = useCallback(async () => {
+    try {
+      const q = query(collection(db, 'users'), where('role', '==', 'pending'));
+      const snapshot = await getDocs(q);
+      setPendingUsers(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    } catch (error) {
+      console.error('Error fetching pending users:', error);
+    }
+  }, []);
+
   // Fetch TAs for selected semester
   const fetchTAs = useCallback(async () => {
     if (!selectedSemester) {
@@ -148,6 +160,10 @@ export default function AdminPanel({ onViewData }) {
     fetchTAs();
     fetchAvailableGroups();
   }, [fetchTAs, fetchAvailableGroups]);
+
+  useEffect(() => {
+    fetchPendingUsers();
+  }, [fetchPendingUsers]);
 
   // Create new semester
   const handleCreateSemester = async () => {
@@ -642,7 +658,8 @@ export default function AdminPanel({ onViewData }) {
         authType: 'google'
       });
       fetchTAs();
-      
+      fetchPendingUsers();
+
       // แสดงข้อมูลสำหรับ copy ไปบอก TA
       if (createdAuthType === 'email') {
         setUploadSuccess(
@@ -1124,6 +1141,41 @@ export default function AdminPanel({ onViewData }) {
               ))}
             </select>
           </div>
+
+          {/* รออนุมัติ — ผู้ที่ login ด้วย Google แล้ว รอกำหนดสิทธิ์ */}
+          {pendingUsers.length > 0 && (
+            <div className="bg-yellow-900/10 border border-yellow-500/30 rounded-2xl p-6">
+              <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
+                <Clock className="w-5 h-5 text-yellow-400" /> รออนุมัติ ({pendingUsers.length})
+              </h3>
+              <p className="text-slate-400 text-sm mb-4">
+                ผู้ที่ Sign in ด้วย Google แล้ว รอกำหนดสิทธิ์ — กด "อนุมัติ" เพื่อเติมอีเมลลงฟอร์มด้านล่าง แล้วเลือกรายการ + กลุ่ม แล้วกด "เพิ่ม TA"
+              </p>
+              <div className="space-y-2">
+                {pendingUsers.map(u => (
+                  <div key={u.id} className="flex items-center justify-between gap-3 bg-slate-800/50 rounded-lg px-4 py-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      {u.photoURL && <img src={u.photoURL} className="w-8 h-8 rounded-full flex-shrink-0" alt="" />}
+                      <div className="min-w-0">
+                        <div className="text-sm text-white truncate">{u.displayName || u.email}</div>
+                        <div className="text-xs text-slate-400 truncate">{u.email}</div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={() => {
+                        setNewTA(prev => ({ ...prev, email: u.email, displayName: u.displayName || '', authType: 'google', role: 'ta' }));
+                        setUploadError(null);
+                        setUploadSuccess(`เติมอีเมล ${u.email} ลงฟอร์มแล้ว — เลือกรายการ + กลุ่มด้านล่าง แล้วกด "เพิ่ม TA"`);
+                      }}
+                      className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm whitespace-nowrap flex-shrink-0"
+                    >
+                      อนุมัติ →
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {selectedSemester && (
             <>
