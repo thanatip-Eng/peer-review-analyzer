@@ -81,7 +81,9 @@ export default function AdminPanel({ onViewData }) {
     try {
       const snapshot = await getDocs(collection(db, 'semesters'));
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setSemesters(data.sort((a, b) => b.id.localeCompare(a.id)));
+      // เรียงรายการที่สร้าง/ดึงล่าสุดไว้บนสุด (ตาม createdAt; ถ้าไม่มีค่อย fallback เป็น id)
+      const ts = (x) => (x.createdAt?.seconds ?? x.createdAt?._seconds ?? 0);
+      setSemesters(data.sort((a, b) => (ts(b) - ts(a)) || b.id.localeCompare(a.id)));
       
       if (data.length > 0 && !selectedSemester) {
         setSelectedSemester(data[0].id);
@@ -193,12 +195,12 @@ export default function AdminPanel({ onViewData }) {
 
   // Upload Peer Review CSV
   // บันทึกผลวิเคราะห์ลง Firestore แบบ chunk — ใช้ร่วมทั้งเส้นทาง CSV และ Canvas
-  const savePeerReviewResult = async (result, sourceName) => {
+  const savePeerReviewResult = async (result, semesterId, sourceName) => {
     // แบ่งข้อมูลออกเป็น chunks เพื่อหลีกเลี่ยง Firestore 1MB limit
     const CHUNK_SIZE = 100; // จำนวน students/graders ต่อ chunk
 
     // 1. Save metadata และ stats
-    const metaRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', 'meta');
+    const metaRef = doc(db, 'semesters', semesterId, 'peerReviewData', 'meta');
     await setDoc(metaRef, {
       stats: result.stats,
       uploadedAt: serverTimestamp(),
@@ -213,7 +215,7 @@ export default function AdminPanel({ onViewData }) {
     for (let i = 0; i < studentEntries.length; i += CHUNK_SIZE) {
       const chunk = studentEntries.slice(i, i + CHUNK_SIZE);
       const chunkObj = Object.fromEntries(chunk);
-      const chunkRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', `students_${Math.floor(i/CHUNK_SIZE)}`);
+      const chunkRef = doc(db, 'semesters', semesterId, 'peerReviewData', `students_${Math.floor(i/CHUNK_SIZE)}`);
       await setDoc(chunkRef, { data: chunkObj, chunkIndex: Math.floor(i/CHUNK_SIZE) });
     }
 
@@ -222,7 +224,7 @@ export default function AdminPanel({ onViewData }) {
     for (let i = 0; i < graderEntries.length; i += CHUNK_SIZE) {
       const chunk = graderEntries.slice(i, i + CHUNK_SIZE);
       const chunkObj = Object.fromEntries(chunk);
-      const chunkRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', `graders_${Math.floor(i/CHUNK_SIZE)}`);
+      const chunkRef = doc(db, 'semesters', semesterId, 'peerReviewData', `graders_${Math.floor(i/CHUNK_SIZE)}`);
       await setDoc(chunkRef, { data: chunkObj, chunkIndex: Math.floor(i/CHUNK_SIZE) });
     }
 
@@ -230,7 +232,7 @@ export default function AdminPanel({ onViewData }) {
     const reviewChunkSize = 200;
     for (let i = 0; i < result.reviews.length; i += reviewChunkSize) {
       const chunk = result.reviews.slice(i, i + reviewChunkSize);
-      const chunkRef = doc(db, 'semesters', selectedSemester, 'peerReviewData', `reviews_${Math.floor(i/reviewChunkSize)}`);
+      const chunkRef = doc(db, 'semesters', semesterId, 'peerReviewData', `reviews_${Math.floor(i/reviewChunkSize)}`);
       await setDoc(chunkRef, { data: chunk, chunkIndex: Math.floor(i/reviewChunkSize) });
     }
   };
@@ -245,7 +247,7 @@ export default function AdminPanel({ onViewData }) {
 
     try {
       const result = await parseCSV(file);
-      await savePeerReviewResult(result, file.name);
+      await savePeerReviewResult(result, selectedSemester, file.name);
       setUploadSuccess(`อัปโหลดข้อมูล Peer Review สำเร็จ! (${Object.keys(result.students).length} นักศึกษา, ${Object.keys(result.graders).length} graders)`);
     } catch (error) {
       console.error('Upload error:', error);
@@ -353,17 +355,41 @@ export default function AdminPanel({ onViewData }) {
   };
 
   const handleCanvasSave = async () => {
-    if (!canvasPreview || !selectedSemester) {
-      setUploadError('กรุณาเลือกเทอมและดึงข้อมูลก่อนบันทึก');
+    if (!canvasPreview) {
+      setUploadError('กรุณาดึงข้อมูลก่อนบันทึก');
       return;
     }
     setUploadError(null);
     setCanvasLoading('save');
     try {
+      const meta = canvasPreview.meta || {};
+      const course = canvasCourses.find(c => String(c.id) === String(selectedCourseId));
+      const courseName = course ? course.name : `Course ${selectedCourseId}`;
       const assignment = canvasAssignments.find(a => String(a.id) === String(selectedAssignmentId));
-      const sourceName = `Canvas: ${assignment ? assignment.name : selectedAssignmentId}`;
-      await savePeerReviewResult(canvasPreview, sourceName);
-      setUploadSuccess(`บันทึกข้อมูลจาก Canvas สำเร็จ! (${Object.keys(canvasPreview.students).length} นักศึกษา, ${Object.keys(canvasPreview.graders).length} graders)`);
+      const assignmentName = meta.assignmentName || (assignment ? assignment.name : `Assignment ${selectedAssignmentId}`);
+
+      // สร้าง/อัปเดตรายการอัตโนมัติจาก Canvas — 1 assignment = 1 รายการ
+      // id คงที่ตาม course+assignment เพื่อให้ดึงซ้ำแล้วเขียนทับรายการเดิม (ไม่สร้างซ้ำ)
+      const semesterId = `canvas_${selectedCourseId}_${selectedAssignmentId}`;
+      const semesterName = `${courseName} · ${assignmentName}`;
+
+      await setDoc(doc(db, 'semesters', semesterId), {
+        name: semesterName,
+        courseCode: '',
+        courseName,
+        assignmentName,
+        source: 'canvas',
+        canvasCourseId: String(selectedCourseId),
+        canvasAssignmentId: String(selectedAssignmentId),
+        maxScore: meta.maxScore ?? null,
+        createdAt: serverTimestamp(),
+      }, { merge: true });
+
+      await savePeerReviewResult(canvasPreview, semesterId, `Canvas: ${assignmentName}`);
+
+      await fetchSemesters();
+      setSelectedSemester(semesterId);
+      setUploadSuccess(`บันทึกจาก Canvas สำเร็จ! สร้างรายการ "${semesterName}" (${Object.keys(canvasPreview.students).length} นักศึกษา, ${Object.keys(canvasPreview.graders).length} graders)`);
       setCanvasPreview(null);
     } catch (err) {
       setUploadError(`บันทึกไม่สำเร็จ: ${err.message}`);
@@ -817,9 +843,9 @@ export default function AdminPanel({ onViewData }) {
             </select>
           </div>
 
-          {selectedSemester && (
-            <div className="space-y-6">
+          <div className="space-y-6">
               {/* ===== Peer Review: ดึงจาก Canvas โดยตรง / อัปโหลด CSV ===== */}
+              {/* การ์ดนี้แสดงเสมอ: โหมด Canvas สร้างรายการให้อัตโนมัติ (ไม่ต้องเลือกเทอมก่อน) */}
               <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6">
                 <div className="flex items-center gap-3 mb-4">
                   <div className="w-12 h-12 bg-gradient-to-br from-cyan-500 to-purple-600 rounded-xl flex items-center justify-center">
@@ -827,7 +853,7 @@ export default function AdminPanel({ onViewData }) {
                   </div>
                   <div>
                     <h3 className="text-lg font-semibold">ข้อมูล Peer Review</h3>
-                    <p className="text-slate-400 text-sm">ดึงจาก Canvas โดยตรง หรืออัปโหลดไฟล์ CSV</p>
+                    <p className="text-slate-400 text-sm">ดึงจาก Canvas โดยตรง (สร้างรายการอัตโนมัติ) หรืออัปโหลดไฟล์ CSV</p>
                   </div>
                 </div>
 
@@ -967,20 +993,36 @@ export default function AdminPanel({ onViewData }) {
                     {/* 4) Preview + บันทึก */}
                     {canvasPreview && (
                       <div className="bg-slate-800/50 border border-cyan-500/30 rounded-xl p-4">
-                        <p className="text-sm font-medium mb-2 text-cyan-300">ผลที่ดึงมา (ยังไม่บันทึก)</p>
-                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-4">
+                        <p className="text-sm font-medium mb-1 text-cyan-300">
+                          ผลที่ดึงมา (ยังไม่บันทึก){canvasPreview.meta?.assignmentName ? ` — ${canvasPreview.meta.assignmentName}` : ''}
+                        </p>
+                        {canvasPreview.meta?.maxScore != null && (
+                          <p className="text-xs text-slate-400 mb-3">คะแนนเต็มงาน: {canvasPreview.meta.maxScore}</p>
+                        )}
+                        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-3">
                           <div><span className="text-slate-400">นักศึกษา:</span> {Object.keys(canvasPreview.students).length}</div>
                           <div><span className="text-slate-400">Graders:</span> {Object.keys(canvasPreview.graders).length}</div>
                           <div><span className="text-slate-400">Reviews:</span> {canvasPreview.stats.totalReviews}</div>
                           <div><span className="text-slate-400">ทำเสร็จ:</span> {canvasPreview.stats.completedReviews}</div>
                         </div>
+                        {/* เตือนเรื่องได้รับงานไม่ครบ 3 / ส่ง late */}
+                        {(canvasPreview.stats.gradersNotAssigned3Count > 0 || canvasPreview.stats.lateStudentsCount > 0) && (
+                          <div className="text-xs space-y-1 mb-3">
+                            {canvasPreview.stats.gradersNotAssigned3Count > 0 && (
+                              <p className="text-amber-400">⚠️ ได้รับงานรีวิวไม่ครบ 3: {canvasPreview.stats.gradersNotAssigned3Count} คน</p>
+                            )}
+                            {canvasPreview.stats.lateStudentsCount > 0 && (
+                              <p className="text-amber-400">⏰ ส่งงาน late: {canvasPreview.stats.lateStudentsCount} คน</p>
+                            )}
+                          </div>
+                        )}
                         <button
                           onClick={handleCanvasSave}
                           disabled={canvasLoading === 'save'}
                           className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50"
                         >
                           <Save className="w-4 h-4" />
-                          {canvasLoading === 'save' ? 'กำลังบันทึก...' : 'บันทึกเข้าเทอมนี้'}
+                          {canvasLoading === 'save' ? 'กำลังบันทึก...' : 'บันทึก (สร้างรายการอัตโนมัติ)'}
                         </button>
                       </div>
                     )}
@@ -988,22 +1030,27 @@ export default function AdminPanel({ onViewData }) {
                 )}
 
                 {peerReviewMode === 'csv' && (
-                  <label className="cursor-pointer block max-w-md">
-                    <input
-                      type="file"
-                      accept=".csv"
-                      onChange={handlePeerReviewUpload}
-                      className="hidden"
-                      disabled={uploading}
-                    />
-                    <div className={`px-4 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-center ${uploading ? 'opacity-50' : ''}`}>
-                      {uploading ? 'กำลังอัปโหลด...' : 'เลือกไฟล์ Peer Review (CSV)'}
-                    </div>
-                  </label>
+                  !selectedSemester ? (
+                    <p className="text-amber-400 text-sm">⚠️ โหมด CSV ต้อง "เลือกเทอม" ด้านล่างก่อน (โหมดดึงจาก Canvas สร้างรายการให้อัตโนมัติ)</p>
+                  ) : (
+                    <label className="cursor-pointer block max-w-md">
+                      <input
+                        type="file"
+                        accept=".csv"
+                        onChange={handlePeerReviewUpload}
+                        className="hidden"
+                        disabled={uploading}
+                      />
+                      <div className={`px-4 py-3 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-center ${uploading ? 'opacity-50' : ''}`}>
+                        {uploading ? 'กำลังอัปโหลด...' : 'เลือกไฟล์ Peer Review (CSV)'}
+                      </div>
+                    </label>
+                  )
                 )}
               </div>
 
-              {/* Student Data Upload */}
+              {/* Student Data Upload — ยังใช้ระบบเลือกเทอมเดิม */}
+              {selectedSemester && (
               <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6 max-w-md">
                 <div className="w-12 h-12 bg-gradient-to-br from-green-500 to-teal-600 rounded-xl flex items-center justify-center mb-4">
                   <Users className="w-6 h-6" />
@@ -1034,8 +1081,8 @@ export default function AdminPanel({ onViewData }) {
                   </div>
                 </label>
               </div>
-            </div>
-          )}
+              )}
+          </div>
         </div>
       )}
 

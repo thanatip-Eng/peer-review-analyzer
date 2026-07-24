@@ -40,7 +40,9 @@ export async function fetchCourses(config) {
   const courses = await callProxy(config, 'courses');
   return (courses || [])
     .filter((c) => c && c.id)
-    .map((c) => ({ id: c.id, name: c.name || `Course ${c.id}` }));
+    .map((c) => ({ id: c.id, name: c.name || `Course ${c.id}` }))
+    // เรียงคอร์สที่สร้างล่าสุดไว้บนสุด (id มากกว่า = สร้างทีหลัง)
+    .sort((a, b) => Number(b.id) - Number(a.id));
 }
 
 export async function fetchAssignments(config, courseId) {
@@ -52,7 +54,9 @@ export async function fetchAssignments(config, courseId) {
       name: a.name || `Assignment ${a.id}`,
       hasRubric: !!(a.rubric && a.rubric.length),
       peerReviews: !!a.peer_reviews,
-    }));
+      pointsPossible: a.points_possible != null ? a.points_possible : null,
+    }))
+    .sort((a, b) => Number(b.id) - Number(a.id));
 }
 
 // สร้างชื่อในรูปแบบ "<รหัสนักศึกษา> <ชื่อ-สกุล>" ให้ตรงกับที่ parseStudentName แยก studentId ได้
@@ -84,6 +88,16 @@ export async function fetchPeerReviewData(config, courseId, assignmentId) {
     if (key) critIdToKey[crit.id] = key;
   });
 
+  // คะแนนเต็มของงาน: ใช้ points_possible ของ assignment เป็นหลัก
+  // ถ้าไม่มี ใช้ผลรวมคะแนนเต็มของ rubric แล้วค่อย fallback เป็น 12
+  const rubricTotal = rubric.reduce((sum, c) => sum + (Number(c.points) || 0), 0);
+  const maxScore =
+    assignment?.points_possible != null && assignment.points_possible > 0
+      ? Number(assignment.points_possible)
+      : rubricTotal > 0
+      ? rubricTotal
+      : 12;
+
   // 2) users -> map userId -> ชื่อ (รวมทั้งเจ้าของงานและผู้รีวิว)
   const users = await callProxy(config, 'users', { courseId });
   const userMap = {};
@@ -95,11 +109,19 @@ export async function fetchPeerReviewData(config, courseId, assignmentId) {
   const submissions = await callProxy(config, 'submissions', { courseId, assignmentId });
   const submissionOwner = {}; // submissionId -> ownerUserId
   const commentsBySubAuthor = {}; // `${submissionId}_${authorId}` -> [comment,...]
+  const lateByOwner = {}; // ownerUserId -> { late, secondsLate }
   (submissions || []).forEach((sub) => {
     if (!sub || sub.id == null) return;
     submissionOwner[sub.id] = sub.user_id;
     if (sub.user && sub.user_id != null && !userMap[sub.user_id]) {
       userMap[sub.user_id] = formatName(sub.user);
+    }
+    // เก็บสถานะส่ง late ของเจ้าของงาน (จาก Canvas: late / seconds_late)
+    if (sub.user_id != null) {
+      lateByOwner[sub.user_id] = {
+        late: !!sub.late,
+        secondsLate: Number(sub.seconds_late) || 0,
+      };
     }
     (sub.submission_comments || []).forEach((cm) => {
       const key = `${sub.id}_${cm.author_id}`;
@@ -165,6 +187,7 @@ export async function fetchPeerReviewData(config, courseId, assignmentId) {
 
       // ถือว่า "ทำเสร็จ" เมื่อมีคะแนนรายเกณฑ์จริง (สอดคล้องกับ isCompleted ในเส้นทาง CSV)
       const submissionComments = (commentsBySubAuthor[`${submissionId}_${assessorId}`] || []).join(' | ');
+      const ownerLate = lateByOwner[ownerId] || { late: false, secondsLate: 0 };
 
       return {
         studentName,
@@ -173,6 +196,8 @@ export async function fetchPeerReviewData(config, courseId, assignmentId) {
         gradeAverage: null, // analyzer คำนวณ workScore.average ให้เอง
         submissionComments,
         comments,
+        ownerLate: ownerLate.late,
+        ownerSecondsLate: ownerLate.secondsLate,
       };
     })
     .filter(Boolean);
@@ -181,5 +206,13 @@ export async function fetchPeerReviewData(config, courseId, assignmentId) {
     throw new Error('ไม่พบข้อมูล peer review ใน assignment นี้ (ตรวจว่าเปิด peer review และมีการมอบหมายแล้ว)');
   }
 
-  return buildAnalysis(reviewRows);
+  const analysis = buildAnalysis(reviewRows, { maxScore });
+  analysis.meta = {
+    courseId,
+    assignmentId,
+    assignmentName: assignment?.name || `Assignment ${assignmentId}`,
+    maxScore,
+    pointsPossible: assignment?.points_possible ?? null,
+  };
+  return analysis;
 }

@@ -152,7 +152,8 @@ function mapCSVToReviewRows(rawData, headers) {
  *   submissionComments:string, comments:{criteria_x:string}}>} reviewRows
  * โครงสร้างผลลัพธ์ { reviews, students, graders, stats } เหมือนเดิมทุกอย่าง
  */
-export function buildAnalysis(reviewRows) {
+export function buildAnalysis(reviewRows, options = {}) {
+  const maxScore = options.maxScore != null && options.maxScore > 0 ? options.maxScore : 12;
   const reviews = [];
   const students = {};  // เจ้าของงาน (Student Name)
   const graders = {};   // คนรีวิว (Review assigned)
@@ -241,10 +242,18 @@ export function buildAnalysis(reviewRows) {
         gradesReceived: [],
         reviewsReceived: [],
         workScore: { average: 0, min: null, max: null, stdDev: 0, grades: [], graderCount: 0, isReliable: false },
+        submittedLate: false,
+        secondsLate: 0,
         flags: []
       };
     }
-    
+
+    // สถานะส่ง late ของเจ้าของงาน (มาจาก Canvas เท่านั้น; CSV จะไม่มี = false)
+    if (row.ownerLate) {
+      students[studentName].submittedLate = true;
+      students[studentName].secondsLate = Math.max(students[studentName].secondsLate, Number(row.ownerSecondsLate) || 0);
+    }
+
     students[studentName].gradersAssigned++;
     students[studentName].reviewsReceived.push(review.id);
     
@@ -318,8 +327,8 @@ export function buildAnalysis(reviewRows) {
       // 1. มี grader อย่างน้อย 2 คน
       // 2. SD ต้องไม่สูงเกินไป (< 3)
       // 3. คะแนนต่ำสุดต้อง >= 0
-      // 4. คะแนนสูงสุดต้อง <= 12
-      const isScoreInValidRange = min >= 0 && max <= 12;
+      // 4. คะแนนสูงสุดต้อง <= คะแนนเต็มงาน (maxScore)
+      const isScoreInValidRange = min >= 0 && max <= maxScore;
       const isReliable = grades.length >= 2 && stdDev < 3 && isScoreInValidRange;
       
       student.workScore = {
@@ -335,17 +344,17 @@ export function buildAnalysis(reviewRows) {
           grades.length < 2 ? 'grader < 2' : null,
           stdDev >= 3 ? `SD สูง (${stdDev.toFixed(2)})` : null,
           min < 0 ? `คะแนนต่ำกว่า 0 (${min})` : null,
-          max > 12 ? `คะแนนเกิน 12 (${max})` : null
+          max > maxScore ? `คะแนนเกิน ${maxScore} (${max})` : null
         ].filter(Boolean) : []
       };
-      
-      // เพิ่ม flag สำหรับคะแนนเกิน 12
-      const overMaxGrades = grades.filter(g => g > 12);
+
+      // เพิ่ม flag สำหรับคะแนนเกินคะแนนเต็ม
+      const overMaxGrades = grades.filter(g => g > maxScore);
       if (overMaxGrades.length > 0) {
-        student.flags.push({ 
-          type: 'score_over_max', 
-          message: `⚠️ มีคะแนนเกิน 12: ${overMaxGrades.join(', ')}`, 
-          severity: 'alert' 
+        student.flags.push({
+          type: 'score_over_max',
+          message: `⚠️ มีคะแนนเกิน ${maxScore}: ${overMaxGrades.join(', ')}`,
+          severity: 'alert'
         });
       }
       
@@ -365,12 +374,17 @@ export function buildAnalysis(reviewRows) {
       if (max - min >= 6) {
         student.flags.push({ type: 'extreme_range', message: `คะแนนห่างกันมาก: ${min}-${max}`, severity: 'warning' });
       }
-      if (avg < 6) {
-        student.flags.push({ type: 'low_score', message: `คะแนนเฉลี่ยต่ำ: ${avg.toFixed(2)}/12`, severity: 'alert' });
+      if (avg < maxScore / 2) {
+        student.flags.push({ type: 'low_score', message: `คะแนนเฉลี่ยต่ำ: ${avg.toFixed(2)}/${maxScore}`, severity: 'alert' });
       }
       if (grades.length < 2) {
         student.flags.push({ type: 'insufficient_graders', message: `มี grader แค่ ${grades.length} คน`, severity: 'info' });
       }
+    }
+
+    // Flag: เจ้าของงานส่ง late
+    if (student.submittedLate) {
+      student.flags.push({ type: 'late_submission', message: '⏰ ส่งงาน late', severity: 'warning' });
     }
   });
 
@@ -423,16 +437,27 @@ export function buildAnalysis(reviewRows) {
       });
     }
     // Flag: ให้คะแนนเกิน 12
-    const overMaxGrades = details.filter(d => d.gradeGiven > 12);
+    const overMaxGrades = details.filter(d => d.gradeGiven > maxScore);
     if (overMaxGrades.length > 0) {
       const overGradesList = overMaxGrades.map(d => `${d.studentReviewed}: ${d.gradeGiven}`).join(', ');
-      grader.flags.push({ 
-        type: 'gave_score_over_max', 
-        message: `⚠️ ให้คะแนนเกิน 12: ${overGradesList}`, 
-        severity: 'alert' 
+      grader.flags.push({
+        type: 'gave_score_over_max',
+        message: `⚠️ ให้คะแนนเกิน ${maxScore}: ${overGradesList}`,
+        severity: 'alert'
       });
     }
   });
+
+  // สรุปเรื่อง "ได้รับงานครบ 3 ไหม" และ late (ประเด็นจากระบบ peer review ใหม่ของ Canvas)
+  const gradersNotAssigned3 = Object.values(graders)
+    .filter(g => g.assignedReviews !== 3)
+    .map(g => ({ graderName: g.graderName, assignedReviews: g.assignedReviews }));
+  const studentsFewReviewers = Object.values(students)
+    .filter(s => s.gradersAssigned < 3)
+    .map(s => ({ studentName: s.studentName, gradersAssigned: s.gradersAssigned }));
+  const lateStudents = Object.values(students)
+    .filter(s => s.submittedLate)
+    .map(s => s.studentName);
 
   const stats = {
     totalReviews: reviews.length,
@@ -441,7 +466,15 @@ export function buildAnalysis(reviewRows) {
     completedReviews: reviews.filter(r => r.isCompleted).length,
     incompleteReviews: reviews.filter(r => !r.isCompleted).length,
     reviewsWithQualityComments: reviews.filter(r => r.hasAllQualityComments).length,
-    reviewsWithPenalty: reviews.filter(r => r.hasGradeButNoQualityComment).length
+    reviewsWithPenalty: reviews.filter(r => r.hasGradeButNoQualityComment).length,
+    maxScore,
+    // สรุปครบ-3 / late
+    gradersNotAssigned3Count: gradersNotAssigned3.length,
+    gradersNotAssigned3,
+    studentsFewReviewersCount: studentsFewReviewers.length,
+    studentsFewReviewers,
+    lateStudentsCount: lateStudents.length,
+    lateStudents
   };
 
   console.log('Parsed stats:', stats);
