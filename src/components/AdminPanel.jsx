@@ -34,14 +34,14 @@ export default function AdminPanel({ onViewData }) {
   // TAs state
   const [tas, setTAs] = useState([]);
   const [loadingTAs, setLoadingTAs] = useState(true);
-  const [newTA, setNewTA] = useState({ 
-    email: '', 
-    password: '', 
+  const [newTA, setNewTA] = useState({
+    email: '',
+    password: '',
     displayName: '',
-    assignedGroups: '', 
+    assignedGroups: [], // เลือกจาก dropdown (array ของชื่อกลุ่ม)
     canViewAll: false,
     role: 'ta',
-    authType: 'email' // 'email' หรือ 'google'
+    authType: 'google' // 'email' หรือ 'google' (ค่าเริ่มต้น Google)
   });
   const [showPassword, setShowPassword] = useState(false);
   const [selectedSemester, setSelectedSemester] = useState('');
@@ -611,12 +611,11 @@ export default function AdminPanel({ onViewData }) {
         throw new Error('ไม่สามารถสร้าง User ID ได้');
       }
       
-      // Create TA assignment
-      const assignedGroups = newTA.assignedGroups
-        .split(',')
-        .map(g => g.trim())
-        .filter(g => g);
-      
+      // Create TA assignment (assignedGroups เป็น array จาก dropdown แล้ว)
+      const assignedGroups = Array.isArray(newTA.assignedGroups)
+        ? newTA.assignedGroups
+        : String(newTA.assignedGroups || '').split(',').map(g => g.trim()).filter(g => g);
+
       await addDoc(collection(db, 'taAssignments'), {
         odcId: userId,
         email: newTA.email,
@@ -633,14 +632,14 @@ export default function AdminPanel({ onViewData }) {
       const createdRole = newTA.role;
       const createdAuthType = newTA.authType;
       
-      setNewTA({ 
-        email: '', 
-        password: '', 
+      setNewTA({
+        email: '',
+        password: '',
         displayName: '',
-        assignedGroups: '', 
+        assignedGroups: [],
         canViewAll: false,
         role: 'ta',
-        authType: 'email'
+        authType: 'google'
       });
       fetchTAs();
       
@@ -1215,18 +1214,40 @@ export default function AdminPanel({ onViewData }) {
                 {newTA.role === 'ta' && (
                   <div className="grid md:grid-cols-2 gap-4 mb-4">
                     <div>
-                      <label className="block text-sm text-slate-400 mb-2">กลุ่มที่ดูแล</label>
-                      <input
-                        type="text"
-                        placeholder="คั่นด้วย , (เช่น Group A, Group B)"
-                        value={newTA.assignedGroups}
-                        onChange={(e) => setNewTA({ ...newTA, assignedGroups: e.target.value })}
-                        className="w-full px-4 py-2 bg-slate-800 border border-white/10 rounded-lg text-white"
-                      />
-                      {availableGroups.length > 0 && (
-                        <div className="text-xs text-slate-500 mt-1">
-                          กลุ่มที่มี: {availableGroups.join(', ')}
+                      <label className="block text-sm text-slate-400 mb-2">กลุ่มที่ดูแล (เลือกจากรายการ)</label>
+                      {newTA.canViewAll ? (
+                        <p className="text-xs text-slate-500 px-4 py-2 bg-slate-800/50 rounded-lg">เลือก "ดูได้ทุกกลุ่ม" ไว้ — ไม่ต้องเลือกกลุ่ม</p>
+                      ) : availableGroups.length === 0 ? (
+                        <p className="text-xs text-amber-400 px-4 py-2 bg-slate-800/50 rounded-lg">
+                          ยังไม่มีข้อมูลกลุ่มในรายการนี้ — ดึงจาก Canvas ก่อน (กลุ่มจะมาอัตโนมัติ)
+                        </p>
+                      ) : (
+                        <div className="max-h-40 overflow-y-auto bg-slate-800 border border-white/10 rounded-lg p-2 grid grid-cols-2 gap-1">
+                          {availableGroups.map((g) => {
+                            const checked = newTA.assignedGroups.includes(g);
+                            return (
+                              <label key={g} className="flex items-center gap-2 text-sm text-slate-200 px-2 py-1 rounded hover:bg-white/5 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={(e) => {
+                                    setNewTA((prev) => ({
+                                      ...prev,
+                                      assignedGroups: e.target.checked
+                                        ? [...prev.assignedGroups, g]
+                                        : prev.assignedGroups.filter((x) => x !== g),
+                                    }));
+                                  }}
+                                  className="w-4 h-4 rounded"
+                                />
+                                <span className="truncate">{g}</span>
+                              </label>
+                            );
+                          })}
                         </div>
+                      )}
+                      {!newTA.canViewAll && newTA.assignedGroups.length > 0 && (
+                        <div className="text-xs text-cyan-400 mt-1">เลือกแล้ว {newTA.assignedGroups.length} กลุ่ม: {newTA.assignedGroups.join(', ')}</div>
                       )}
                     </div>
                     <div className="flex items-center">
@@ -1332,18 +1353,13 @@ export default function AdminPanel({ onViewData }) {
 function TARow({ ta, availableGroups, onUpdate, onDelete }) {
   const [editing, setEditing] = useState(false);
   const [editData, setEditData] = useState({
-    assignedGroups: ta.assignedGroups?.join(', ') || '',
+    assignedGroups: Array.isArray(ta.assignedGroups) ? ta.assignedGroups : [],
     canViewAll: ta.canViewAll || false
   });
 
   const handleSave = () => {
-    const assignedGroups = editData.assignedGroups
-      .split(',')
-      .map(g => g.trim())
-      .filter(g => g);
-    
     onUpdate(ta.id, {
-      assignedGroups,
+      assignedGroups: editData.canViewAll ? [] : editData.assignedGroups,
       canViewAll: editData.canViewAll
     });
     setEditing(false);
@@ -1354,12 +1370,33 @@ function TARow({ ta, availableGroups, onUpdate, onDelete }) {
       <tr className="bg-slate-800/30">
         <td className="px-4 py-3">{ta.email}</td>
         <td className="px-4 py-3">
-          <input
-            type="text"
-            value={editData.assignedGroups}
-            onChange={(e) => setEditData({ ...editData, assignedGroups: e.target.value })}
-            className="w-full px-2 py-1 bg-slate-700 rounded text-sm"
-          />
+          {editData.canViewAll ? (
+            <span className="text-xs text-slate-500">ดูได้ทุกกลุ่ม</span>
+          ) : availableGroups.length === 0 ? (
+            <span className="text-xs text-amber-400">ยังไม่มีข้อมูลกลุ่ม (ดึงจาก Canvas ก่อน)</span>
+          ) : (
+            <div className="max-h-32 overflow-y-auto grid grid-cols-2 gap-1">
+              {availableGroups.map((g) => {
+                const checked = editData.assignedGroups.includes(g);
+                return (
+                  <label key={g} className="flex items-center gap-1 text-xs text-slate-200 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => setEditData((prev) => ({
+                        ...prev,
+                        assignedGroups: e.target.checked
+                          ? [...prev.assignedGroups, g]
+                          : prev.assignedGroups.filter((x) => x !== g),
+                      }))}
+                      className="w-3.5 h-3.5 rounded"
+                    />
+                    <span className="truncate">{g}</span>
+                  </label>
+                );
+              })}
+            </div>
+          )}
         </td>
         <td className="px-4 py-3 text-center">
           <input
