@@ -9,13 +9,14 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider, EmailAuthProvider } from 'firebase/auth';
 import { getFirestore } from 'firebase/firestore';
 
+// Fallback = โปรเจกต์ที่ใช้งานจริง (peer-review-111) เพื่อไม่ให้เผลอไปต่อฐานข้อมูลว่างถ้า env หลุด
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyAaI0tzBul3syokJVMpubHjcppdWSVsCOE',
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'peer-review-analyzer.firebaseapp.com',
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'peer-review-analyzer',
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'peer-review-analyzer.firebasestorage.app',
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '365548948350',
-  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:365548948350:web:dfb87c679c94683c60812f'
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || 'AIzaSyCVtutWjDVQitg1SxV6us10b2d7ZYfswjM',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || 'peer-review-111.firebaseapp.com',
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || 'peer-review-111',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || 'peer-review-111.firebasestorage.app',
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || '513493961083',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || '1:513493961083:web:fe85dafc4b913c576795de'
 };
 
 // Initialize Firebase
