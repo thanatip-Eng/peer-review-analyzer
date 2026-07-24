@@ -14,7 +14,7 @@ function AppContent() {
   const [activeView, setActiveView] = useState('data'); // 'data' or 'admin'
   const [selectedSemester, setSelectedSemester] = useState('');
   const [semesters, setSemesters] = useState([]);
-  const [taAssignment, setTAAssignment] = useState(null);
+  const [taAssignments, setTAAssignments] = useState({}); // semesterId -> assignment (TA อาจดูแลหลายรายการ)
   const [loading, setLoading] = useState(true);
   const [showChangePassword, setShowChangePassword] = useState(false);
 
@@ -32,19 +32,24 @@ function AppContent() {
         const semData = semSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
         setSemesters(semData.sort((a, b) => b.id.localeCompare(a.id)));
 
-        // If TA, fetch assignment
+        // If TA, fetch ALL assignments (TA อาจดูแลหลายรายการ/หลาย assignment)
         if (isTA) {
           const taQuery = query(
             collection(db, 'taAssignments'),
             where('email', '==', currentUser.email)
           );
           const taSnapshot = await getDocs(taQuery);
-          
-          if (!taSnapshot.empty) {
-            const assignment = taSnapshot.docs[0].data();
-            setTAAssignment(assignment);
-            setSelectedSemester(assignment.semesterId);
-          }
+
+          const map = {};
+          taSnapshot.docs.forEach(d => {
+            const a = d.data();
+            if (a.semesterId) map[a.semesterId] = a;
+          });
+          setTAAssignments(map);
+
+          // เลือกรายการแรกที่ TA ดูแล (เรียงตามลำดับ semesters = ใหม่สุดก่อน)
+          const firstAssigned = semData.map(s => s.id).find(id => map[id]) || Object.keys(map)[0];
+          if (firstAssigned) setSelectedSemester(firstAssigned);
         } else if (semData.length > 0) {
           setSelectedSemester(semData[0].id);
         }
@@ -61,6 +66,11 @@ function AppContent() {
   const handleLogout = async () => {
     await logout();
   };
+
+  // รายการที่แสดงใน dropdown: Admin เห็นทุกอัน, TA เห็นเฉพาะรายการที่ตัวเองดูแล
+  const visibleSemesters = isAdmin ? semesters : semesters.filter(s => taAssignments[s.id]);
+  // assignment ของ TA สำหรับรายการที่เลือกอยู่ (จำกัดกลุ่มตามรายการนั้น)
+  const currentTAAssignment = taAssignments[selectedSemester] || null;
 
   // Not logged in
   if (!currentUser) {
@@ -122,17 +132,17 @@ function AppContent() {
             </div>
 
             <div className="flex items-center gap-4 flex-wrap">
-              {/* Semester selector */}
-              {(isAdmin || semesters.length > 0) && (
+              {/* Semester/รายการ selector — TA เห็นเฉพาะรายการที่ดูแล */}
+              {(isAdmin || visibleSemesters.length > 0) && (
                 <select
                   value={selectedSemester}
                   onChange={(e) => setSelectedSemester(e.target.value)}
-                  className="bg-slate-800 border border-white/10 rounded-lg px-4 py-2 text-sm"
+                  className="bg-slate-800 border border-white/10 rounded-lg px-4 py-2 text-sm max-w-xs"
                 >
-                  <option value="">-- เลือกเทอม --</option>
-                  {semesters.map(sem => (
+                  <option value="">-- เลือกรายการ --</option>
+                  {visibleSemesters.map(sem => (
                     <option key={sem.id} value={sem.id}>
-                      {sem.name} - {sem.courseCode}
+                      {sem.name}{sem.courseCode ? ` - ${sem.courseCode}` : ''}
                     </option>
                   ))}
                 </select>
@@ -214,9 +224,9 @@ function AppContent() {
 
         {/* Data Viewer */}
         {(activeView === 'data' || isTA) && selectedSemester && (
-          <DataViewer 
+          <DataViewer
             semesterId={selectedSemester}
-            taAssignment={taAssignment}
+            taAssignment={currentTAAssignment}
           />
         )}
 
@@ -241,22 +251,7 @@ function AppContent() {
       <footer className="border-t border-white/10 mt-auto">
         <div className="max-w-7xl mx-auto px-4 py-4">
           <div className="flex flex-wrap justify-center gap-6 text-sm text-slate-500">
-            <a 
-              href="http://10.110.3.252:8000/" 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="hover:text-purple-400"
-            >
-              🎓 ระบบดึงคะแนน Peer (มช.)
-            </a>
-            <a 
-              href="https://canvas-group-exporter.vercel.app/" 
-              target="_blank" 
-              rel="noopener noreferrer"
-              className="hover:text-cyan-400"
-            >
-              🔗 Canvas Group Exporter
-            </a>
+            <span>Peer Review Analyzer · ดึงข้อมูลจาก Canvas โดยตรง</span>
           </div>
         </div>
       </footer>
