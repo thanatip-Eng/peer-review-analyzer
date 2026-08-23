@@ -11,7 +11,7 @@ import { LogOut, Settings, BarChart2, User, Clock, Key } from 'lucide-react';
 
 function AppContent() {
   const { currentUser, userRole, userData, logout, isAdmin, isTA, isPending, isEmailAuth } = useAuth();
-  const [activeView, setActiveView] = useState('data'); // 'data' or 'admin'
+  const [activeView, setActiveView] = useState('admin'); // 'data' or 'admin' — หน้าแรก = จัดการ
   const [selectedSemester, setSelectedSemester] = useState('');
   const [semesters, setSemesters] = useState([]);
   const [taAssignments, setTAAssignments] = useState({}); // semesterId -> assignment (TA อาจดูแลหลายรายการ)
