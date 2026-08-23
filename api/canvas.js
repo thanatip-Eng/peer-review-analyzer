@@ -14,17 +14,19 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // fetch พร้อม timeout ต่อคำขอ + retry เมื่อเจอ 5xx/timeout/network error
 // เพื่อไม่ให้คำขอที่ค้างกินเวลา function จนหมด
-async function fetchWithRetry(url, apiKey, { attempts = 2, timeoutMs = 25000 } = {}) {
+async function fetchWithRetry(url, apiKey, { attempts = 2, timeoutMs = 25000, method = 'GET', body = null } = {}) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const resp = await fetch(url, {
+        method,
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
+        body: body ? JSON.stringify(body) : undefined,
         signal: controller.signal,
       });
       clearTimeout(timer);
@@ -122,6 +124,22 @@ export default async function handler(req, res) {
     }
 
     const baseUrl = String(canvasUrl).trim().replace(/\/+$/, '');
+
+    // ----- GraphQL: ดึง submissions + peer rubric assessments แบบแบ่งหน้า (สำหรับ course ใหญ่) -----
+    if (body.graphql) {
+      const resp = await fetchWithRetry(`${baseUrl}/api/graphql`, apiKey, {
+        method: 'POST',
+        body: { query: body.graphql.query, variables: body.graphql.variables || {} },
+        timeoutMs: 55000,
+        attempts: 2,
+      });
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => '');
+        return res.status(resp.status).json({ error: `Canvas GraphQL ${resp.status}: ${text.slice(0, 200)}` });
+      }
+      const json = await resp.json();
+      return res.status(200).json(json); // { data, errors }
+    }
 
     let url;
     if (nextUrl) {

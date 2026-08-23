@@ -55,6 +55,32 @@ async function callProxy(config, resource, extra = {}, onPage) {
   return all;
 }
 
+// เรียก Canvas GraphQL ผ่าน proxy (สำหรับดึงข้อมูลก้อนใหญ่แบบแบ่งหน้า cursor)
+async function callGraphQL(config, query, variables) {
+  const resp = await fetch('/api/canvas', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      apiKey: config.apiKey,
+      canvasUrl: config.canvasUrl,
+      graphql: { query, variables },
+    }),
+  });
+  let payload = {};
+  try {
+    payload = await resp.json();
+  } catch {
+    // ignore
+  }
+  if (!resp.ok) {
+    throw new Error(payload.error || `เรียก Canvas (GraphQL) ไม่สำเร็จ (${resp.status})`);
+  }
+  if (payload.errors && payload.errors.length) {
+    throw new Error('GraphQL: ' + payload.errors.map((e) => e.message).join('; ').slice(0, 160));
+  }
+  return payload.data;
+}
+
 // ---- ดึงรายการ course / assignment สำหรับ dropdown ----
 export async function fetchCourses(config) {
   const courses = await callProxy(config, 'courses');
@@ -132,178 +158,146 @@ function formatName(user) {
  * ดึงและประกอบข้อมูล peer review ของ assignment หนึ่ง แล้ววิเคราะห์
  * @returns ผลลัพธ์จาก buildAnalysis: { reviews, students, graders, stats }
  */
+// GraphQL query: ดึง submissions ทีละหน้า (cursor) พร้อมคะแนน peer rubric ในคำขอเดียว
+const PEER_QUERY = `
+query PeerReview($aid: ID!, $after: String) {
+  assignment(id: $aid) {
+    _id
+    name
+    pointsPossible
+    rubric { criteria { _id description points } }
+    submissionsConnection(first: 40, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        _id
+        late
+        secondsLate
+        user { _id name sortableName sisId }
+        rubricAssessmentsConnection(first: 25) {
+          nodes {
+            assessmentType
+            score
+            assessor { _id name sortableName sisId }
+            assessmentRatings { criterion { _id } points comments }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+const graphName = (u) => {
+  if (!u) return '';
+  const sid = (u.sisId || '').toString().trim();
+  const name = (u.sortableName || u.name || '').toString().trim();
+  return sid ? `${sid} ${name}`.trim() : name;
+};
+
+/**
+ * ดึงและประกอบข้อมูล peer review ของ assignment หนึ่งด้วย Canvas GraphQL (รองรับ course ใหญ่)
+ * แบ่งหน้าแบบ cursor -> แต่ละคำขอเล็ก/เร็ว ไม่ชน timeout
+ * หมายเหตุ: GraphQL ให้เฉพาะรีวิวที่ "ทำเสร็จ" (มี rubric assessment) จึงกำหนด assignedPerGrader=3
+ * @returns ผลลัพธ์จาก buildAnalysis: { reviews, students, graders, stats, meta, groupData }
+ */
 export async function fetchPeerReviewData(config, courseId, assignmentId, onProgress) {
   const report = typeof onProgress === 'function' ? onProgress : () => {};
 
-  // 1) assignment -> rubric (เกณฑ์) + rubric id  (คำขอแรก = ตรวจ token/สิทธิ์ไปในตัว)
+  // หน้าแรก = ตรวจ token/สิทธิ์ + ได้ข้อมูล assignment/rubric ไปในตัว
   report('ตรวจสอบ token + ดึงข้อมูล assignment', 'running');
-  const assignment = await callProxy(config, 'assignment', { courseId, assignmentId });
-  report('ตรวจสอบ token + ดึงข้อมูล assignment', 'done', assignment?.name || '');
+  let data = await callGraphQL(config, PEER_QUERY, { aid: String(assignmentId), after: null });
+  const assignment = data && data.assignment;
+  if (!assignment) {
+    throw new Error('ไม่พบ assignment (ตรวจ token/สิทธิ์ หรือหมายเลข assignment)');
+  }
+  report('ตรวจสอบ token + ดึงข้อมูล assignment', 'done', assignment.name || '');
 
-  const rubric = Array.isArray(assignment?.rubric) ? assignment.rubric : [];
-  const rubricId = assignment?.rubric_settings?.id || assignment?.rubric_id || null;
-
-  if (!rubric.length) {
+  const rubricCriteria = (assignment.rubric && assignment.rubric.criteria) || [];
+  if (!rubricCriteria.length) {
     throw new Error('Assignment นี้ไม่มี Rubric — ไม่สามารถดึงคะแนนรายเกณฑ์ได้');
   }
-
-  // map criterion_id ของ Canvas -> key เกณฑ์ของ analyzer (จับคู่ตามลำดับเกณฑ์ใน rubric)
+  // map criterion _id -> key ของ analyzer (ตามลำดับเกณฑ์)
   const critIdToKey = {};
-  rubric.forEach((crit, i) => {
-    const key = DEFAULT_CRITERIA[i]?.key;
-    if (key) critIdToKey[crit.id] = key;
+  rubricCriteria.forEach((c, i) => {
+    const key = DEFAULT_CRITERIA[i] && DEFAULT_CRITERIA[i].key;
+    if (key) critIdToKey[c._id] = key;
   });
-
-  // คะแนนเต็มของงาน: ใช้ points_possible ของ assignment เป็นหลัก
-  // ถ้าไม่มี ใช้ผลรวมคะแนนเต็มของ rubric แล้วค่อย fallback เป็น 12
-  const rubricTotal = rubric.reduce((sum, c) => sum + (Number(c.points) || 0), 0);
+  const rubricTotal = rubricCriteria.reduce((s, c) => s + (Number(c.points) || 0), 0);
   const maxScore =
-    assignment?.points_possible != null && assignment.points_possible > 0
-      ? Number(assignment.points_possible)
+    assignment.pointsPossible != null && assignment.pointsPossible > 0
+      ? Number(assignment.pointsPossible)
       : rubricTotal > 0
       ? rubricTotal
       : 12;
 
-  // 2) users -> map userId -> ชื่อ (รวมทั้งเจ้าของงานและผู้รีวิว)
-  report('ดึงรายชื่อนักศึกษา', 'running');
-  const users = await callProxy(config, 'users', { courseId }, (n) => report('ดึงรายชื่อนักศึกษา', 'running', `${n} คน...`));
-  report('ดึงรายชื่อนักศึกษา', 'done', `${(users || []).length} คน`);
-  const userMap = {};
-  const userInfo = {}; // userId -> { sisId, name } (ใช้สร้างข้อมูลกลุ่ม)
-  (users || []).forEach((u) => {
-    if (u && u.id != null) {
-      userMap[u.id] = formatName(u);
-      userInfo[u.id] = {
-        sisId: (u.sis_user_id || u.login_id || '').toString().trim(),
-        name: (u.sortable_name || u.name || '').toString().trim(),
-      };
+  const reviewRows = [];
+  const userInfo = {}; // userId -> { sisId, name } (ไว้สร้างข้อมูลกลุ่ม)
+  const recordUser = (u) => {
+    if (u && u._id != null && !userInfo[u._id]) {
+      userInfo[u._id] = { sisId: (u.sisId || '').toString().trim(), name: (u.sortableName || u.name || '').toString().trim() };
     }
-  });
+  };
 
-  // 3) submissions -> map submissionId -> owner + เก็บ submission_comments แยกตามผู้เขียน
-  report('ดึงการส่งงาน (submissions)', 'running');
-  const submissions = await callProxy(config, 'submissions', { courseId, assignmentId }, (n) => report('ดึงการส่งงาน (submissions)', 'running', `${n} งาน...`));
-  report('ดึงการส่งงาน (submissions)', 'done', `${(submissions || []).length} งาน`);
-  const submissionOwner = {}; // submissionId -> ownerUserId
-  const commentsBySubAuthor = {}; // `${submissionId}_${authorId}` -> [comment,...]
-  const lateByOwner = {}; // ownerUserId -> { late, secondsLate }
-  (submissions || []).forEach((sub) => {
-    if (!sub || sub.id == null) return;
-    submissionOwner[sub.id] = sub.user_id;
-    if (sub.user && sub.user_id != null && !userMap[sub.user_id]) {
-      userMap[sub.user_id] = formatName(sub.user);
-    }
-    // เก็บสถานะส่ง late ของเจ้าของงาน (จาก Canvas: late / seconds_late)
-    if (sub.user_id != null) {
-      lateByOwner[sub.user_id] = {
-        late: !!sub.late,
-        secondsLate: Number(sub.seconds_late) || 0,
-      };
-    }
-    (sub.submission_comments || []).forEach((cm) => {
-      const key = `${sub.id}_${cm.author_id}`;
-      if (!commentsBySubAuthor[key]) commentsBySubAuthor[key] = [];
-      if (cm.comment) commentsBySubAuthor[key].push(cm.comment);
-    });
-  });
-
-  // 4) peer reviews -> กราฟการมอบหมาย (assigned/completed) ทุกคู่ (ผู้รีวิว -> เจ้าของงาน)
-  report('ดึงการมอบหมายรีวิว (peer reviews)', 'running');
-  const peerReviews = await callProxy(config, 'peer-reviews', { courseId, assignmentId }, (n) => report('ดึงการมอบหมายรีวิว (peer reviews)', 'running', `${n} รายการ...`));
-  report('ดึงการมอบหมายรีวิว (peer reviews)', 'done', `${(peerReviews || []).length} รายการ`);
-
-  // 5) rubric peer assessments -> คะแนน + คอมเมนต์รายเกณฑ์
-  report('ดึงคะแนนรายเกณฑ์ (rubric)', 'running');
-  let rubricAssessments = [];
-  if (rubricId) {
-    try {
-      const rubricData = await callProxy(config, 'rubric', { courseId, rubricId, heavy: true });
-      rubricAssessments = Array.isArray(rubricData?.assessments) ? rubricData.assessments : [];
-      report('ดึงคะแนนรายเกณฑ์ (rubric)', 'done', `${rubricAssessments.length} การประเมิน`);
-    } catch (e) {
-      console.warn('ดึง rubric assessments ไม่สำเร็จ:', e.message);
-      report('ดึงคะแนนรายเกณฑ์ (rubric)', 'error', `ดึงไม่สำเร็จ: ${e.message.slice(0, 80)} (จะขึ้นว่ายังไม่ทำ)`);
-    }
-  } else {
-    report('ดึงคะแนนรายเกณฑ์ (rubric)', 'error', 'ไม่พบ rubric id');
-  }
-  // key: `${assessorId}_${submissionId}` -> { score, perCriterion: {criterion_id: comments} }
-  const assessmentMap = {};
-  rubricAssessments.forEach((a) => {
-    if (!a || a.assessor_id == null) return;
-    if (a.artifact_type && a.artifact_type !== 'Submission') return;
-    const key = `${a.assessor_id}_${a.artifact_id}`;
-    const perCriterion = {};
-    (a.data || []).forEach((d) => {
-      if (d && d.criterion_id != null) perCriterion[d.criterion_id] = d.comments || '';
-    });
-    assessmentMap[key] = { score: a.score, perCriterion };
-  });
-
-  // ---- ประกอบ reviewRows ----
-  const emptyComments = () =>
-    DEFAULT_CRITERIA.reduce((acc, c) => ((acc[c.key] = ''), acc), {});
-
-  const reviewRows = (peerReviews || [])
-    .map((pr) => {
-      const ownerId = pr.user_id;
-      const assessorId = pr.assessor_id;
-      const submissionId = pr.asset_id; // asset_type === 'Submission'
-      if (ownerId == null || assessorId == null) return null;
-
-      const studentName = userMap[ownerId] || `user_${ownerId}`;
-      const graderName = userMap[assessorId] || `user_${assessorId}`;
-
-      const assessment = assessmentMap[`${assessorId}_${submissionId}`];
-      const comments = emptyComments();
-      let gradeGiven = null;
-
-      if (assessment) {
-        gradeGiven =
-          assessment.score !== null && assessment.score !== undefined
-            ? assessment.score
-            : null;
-        Object.entries(assessment.perCriterion).forEach(([critId, cmt]) => {
-          const key = critIdToKey[critId];
-          if (key) comments[key] = cmt || '';
+  report('ดึง submissions + คะแนน peer', 'running', '0 งาน...');
+  let conn = assignment.submissionsConnection;
+  let processed = 0;
+  let guard = 0;
+  while (conn) {
+    (conn.nodes || []).forEach((sub) => {
+      const owner = sub.user;
+      if (!owner) return;
+      recordUser(owner);
+      const ownerName = graphName(owner);
+      (sub.rubricAssessmentsConnection && sub.rubricAssessmentsConnection.nodes || []).forEach((a) => {
+        if (a.assessmentType !== 'peer_review') return; // เฉพาะ peer review
+        const assessor = a.assessor;
+        if (!assessor) return;
+        recordUser(assessor);
+        const comments = DEFAULT_CRITERIA.reduce((acc, c) => ((acc[c.key] = ''), acc), {});
+        (a.assessmentRatings || []).forEach((r) => {
+          const key = r.criterion && critIdToKey[r.criterion._id];
+          if (key) comments[key] = r.comments || '';
         });
-      }
+        reviewRows.push({
+          studentName: ownerName,
+          graderName: graphName(assessor),
+          gradeGiven: a.score != null ? Number(a.score) : null,
+          gradeAverage: null,
+          submissionComments: '',
+          comments,
+          ownerLate: !!sub.late,
+          ownerSecondsLate: Number(sub.secondsLate) || 0,
+          ownerCanvasId: owner._id,
+          graderCanvasId: assessor._id,
+        });
+      });
+      processed++;
+    });
+    report('ดึง submissions + คะแนน peer', 'running', `${processed} งาน...`);
 
-      // ถือว่า "ทำเสร็จ" เมื่อมีคะแนนรายเกณฑ์จริง (สอดคล้องกับ isCompleted ในเส้นทาง CSV)
-      const submissionComments = (commentsBySubAuthor[`${submissionId}_${assessorId}`] || []).join(' | ');
-      const ownerLate = lateByOwner[ownerId] || { late: false, secondsLate: 0 };
-
-      return {
-        studentName,
-        graderName,
-        gradeGiven,
-        gradeAverage: null, // analyzer คำนวณ workScore.average ให้เอง
-        submissionComments,
-        comments,
-        ownerLate: ownerLate.late,
-        ownerSecondsLate: ownerLate.secondsLate,
-        ownerCanvasId: ownerId,     // Canvas user id (ไว้ลิงก์ SpeedGrader)
-        graderCanvasId: assessorId,
-      };
-    })
-    .filter(Boolean);
+    if (!(conn.pageInfo && conn.pageInfo.hasNextPage)) break;
+    guard++;
+    if (guard > 1000) break;
+    const d = await callGraphQL(config, PEER_QUERY, { aid: String(assignmentId), after: conn.pageInfo.endCursor });
+    conn = d && d.assignment && d.assignment.submissionsConnection;
+  }
+  report('ดึง submissions + คะแนน peer', 'done', `${processed} งาน, ${reviewRows.length} รีวิว`);
 
   if (reviewRows.length === 0) {
-    throw new Error('ไม่พบข้อมูล peer review ใน assignment นี้ (ตรวจว่าเปิด peer review และมีการมอบหมายแล้ว)');
+    throw new Error('ไม่พบ peer review ที่ทำเสร็จใน assignment นี้ (ยังไม่มีใครรีวิว หรือยังไม่ได้ให้คะแนน rubric)');
   }
 
   report('ประมวลผลข้อมูล', 'running');
-  const analysis = buildAnalysis(reviewRows, { maxScore });
+  const analysis = buildAnalysis(reviewRows, { maxScore, assignedPerGrader: 3 });
   analysis.meta = {
     courseId,
     assignmentId,
-    assignmentName: assignment?.name || `Assignment ${assignmentId}`,
+    assignmentName: assignment.name || `Assignment ${assignmentId}`,
     maxScore,
-    pointsPossible: assignment?.points_possible ?? null,
+    pointsPossible: assignment.pointsPossible != null ? assignment.pointsPossible : null,
   };
   report('ประมวลผลข้อมูล', 'done', `${Object.keys(analysis.students).length} นักศึกษา, ${Object.keys(analysis.graders).length} graders`);
 
-  // ดึงข้อมูลกลุ่มอัตโนมัติ (best-effort — ไม่ให้ล้มทั้งกระบวนการถ้ากลุ่มมีปัญหา)
+  // ดึงข้อมูลกลุ่มอัตโนมัติ (REST — เบา; best-effort)
   report('ดึงข้อมูลกลุ่ม', 'running');
   try {
     analysis.groupData = await buildGroupData(config, courseId, userInfo);

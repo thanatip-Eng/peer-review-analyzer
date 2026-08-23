@@ -394,9 +394,15 @@ export function buildAnalysis(reviewRows, options = {}) {
   Object.values(graders).forEach(grader => {
     const pr = grader.peerReviewScore;
     const details = pr.details;
-    
+
     // นับงานที่รีวิวแล้ว
     const reviewedCount = details.length;
+
+    // เส้นทาง GraphQL ให้เฉพาะรีวิวที่ "ทำเสร็จ" -> assignedReviews ที่นับจาก rows จะเท่ากับ completed
+    // ถ้ากำหนดจำนวนที่ควรได้รับต่อคน (เช่น 3) มา ให้ใช้ค่านั้นเป็นตัวหาร (ครบ/โบนัส)
+    if (options.assignedPerGrader) {
+      grader.assignedReviews = Math.max(options.assignedPerGrader, reviewedCount);
+    }
     
     // นับงานที่ "สมบูรณ์" (ขาด comment ไม่เกิน 3 ช่อง)
     const completeCount = details.filter(d => d.isComplete).length;
