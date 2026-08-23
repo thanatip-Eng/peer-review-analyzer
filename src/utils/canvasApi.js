@@ -217,7 +217,7 @@ export async function fetchPeerReviewData(config, courseId, assignmentId, onProg
   let rubricAssessments = [];
   if (rubricId) {
     try {
-      const rubricData = await callProxy(config, 'rubric', { courseId, rubricId });
+      const rubricData = await callProxy(config, 'rubric', { courseId, rubricId, heavy: true });
       rubricAssessments = Array.isArray(rubricData?.assessments) ? rubricData.assessments : [];
       report('ดึงคะแนนรายเกณฑ์ (rubric)', 'done', `${rubricAssessments.length} การประเมิน`);
     } catch (e) {

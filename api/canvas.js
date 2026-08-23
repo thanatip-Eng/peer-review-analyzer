@@ -12,13 +12,13 @@ export const config = { maxDuration: 60 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// fetch พร้อม timeout ต่อคำขอ (abort ที่ 20s) + retry เมื่อเจอ 5xx/timeout/network error
+// fetch พร้อม timeout ต่อคำขอ + retry เมื่อเจอ 5xx/timeout/network error
 // เพื่อไม่ให้คำขอที่ค้างกินเวลา function จนหมด
-async function fetchWithRetry(url, apiKey, attempts = 2) {
+async function fetchWithRetry(url, apiKey, { attempts = 2, timeoutMs = 25000 } = {}) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 25000);
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const resp = await fetch(url, {
         headers: {
@@ -49,8 +49,8 @@ async function fetchWithRetry(url, apiKey, attempts = 2) {
 
 // ดึงแค่ "หน้าเดียว" แล้วคืน { data, next } เพื่อให้ฝั่ง browser วน pagination เอง
 // -> แต่ละ invocation ของ function เล็ก/เร็ว ไม่ชน timeout แม้ course ใหญ่
-async function fetchOnePage(url, apiKey) {
-  const resp = await fetchWithRetry(url, apiKey);
+async function fetchOnePage(url, apiKey, opts) {
+  const resp = await fetchWithRetry(url, apiKey, opts);
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => '');
@@ -141,7 +141,9 @@ export default async function handler(req, res) {
       url = `${baseUrl}${path}`;
     }
 
-    const { data, next } = await fetchOnePage(url, apiKey);
+    // คำขอก้อนใหญ่ (rubric) ให้เวลานานขึ้น (ใกล้ maxDuration) และไม่ retry เพื่อไม่ให้เกินเวลา function
+    const opts = body.heavy ? { attempts: 1, timeoutMs: 55000 } : { attempts: 2, timeoutMs: 25000 };
+    const { data, next } = await fetchOnePage(url, apiKey, opts);
     return res.status(200).json({ data, next });
   } catch (err) {
     const status = err.status || 500;
