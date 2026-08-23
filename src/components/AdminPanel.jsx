@@ -67,6 +67,7 @@ export default function AdminPanel({ onViewData }) {
   const [selectedAssignmentId, setSelectedAssignmentId] = useState('');
   const [canvasLoading, setCanvasLoading] = useState('');   // '' | 'courses' | 'assignments' | 'fetch' | 'save'
   const [canvasPreview, setCanvasPreview] = useState(null); // ผลจาก fetchPeerReviewData ก่อนบันทึก
+  const [canvasSteps, setCanvasSteps] = useState([]);       // รายงานสถานะแต่ละขั้นตอนตอนดึง
 
   // Confirm modal state
   const [confirmModal, setConfirmModal] = useState({
@@ -350,6 +351,20 @@ export default function AdminPanel({ onViewData }) {
     }
   };
 
+  // อัปเดตสถานะแต่ละขั้น (label + status: running/done/error + detail)
+  const reportStep = (label, status, detail = '') => {
+    setCanvasSteps((prev) => {
+      const idx = prev.findIndex((s) => s.label === label);
+      const entry = { label, status, detail };
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = entry;
+        return copy;
+      }
+      return [...prev, entry];
+    });
+  };
+
   const handleCanvasFetch = async () => {
     if (!selectedCourseId || !selectedAssignmentId) {
       setUploadError('กรุณาเลือกวิชาและ assignment');
@@ -358,13 +373,21 @@ export default function AdminPanel({ onViewData }) {
     setUploadError(null);
     setUploadSuccess(null);
     setCanvasPreview(null);
+    setCanvasSteps([]);
     setCanvasLoading('fetch');
     try {
-      const result = await fetchPeerReviewData(canvasConfig(), selectedCourseId, selectedAssignmentId);
+      const result = await fetchPeerReviewData(canvasConfig(), selectedCourseId, selectedAssignmentId, reportStep);
       setCanvasPreview(result);
     } catch (err) {
       console.error('Canvas fetch error:', err);
-      setUploadError(`ดึงข้อมูลจาก Canvas ไม่สำเร็จ: ${err.message}`);
+      // ทำเครื่องหมายว่าขั้นที่กำลังทำอยู่ = ล้มเหลว (จะได้รู้ว่าพังตรงไหน)
+      setCanvasSteps((prev) => prev.map((s) => (s.status === 'running' ? { ...s, status: 'error', detail: err.message.slice(0, 120) } : s)));
+      const hint = /40[13]/.test(err.message)
+        ? ' — น่าจะเป็นปัญหา Access Token/สิทธิ์'
+        : /50[24]|timeout|Gateway/i.test(err.message)
+        ? ' — Canvas ตอบช้า/timeout (ลองใหม่อีกครั้ง)'
+        : '';
+      setUploadError(`ดึงข้อมูลจาก Canvas ไม่สำเร็จ: ${err.message}${hint}`);
     } finally {
       setCanvasLoading('');
     }
@@ -1019,6 +1042,24 @@ export default function AdminPanel({ onViewData }) {
                         <Download className={`w-4 h-4 ${canvasLoading === 'fetch' ? 'animate-pulse' : ''}`} />
                         {canvasLoading === 'fetch' ? 'กำลังดึงข้อมูลจาก Canvas...' : 'ดึงข้อมูล Peer Review'}
                       </button>
+                    )}
+
+                    {/* Progress log — บอกว่ากำลังทำขั้นไหน / พังตรงไหน */}
+                    {canvasSteps.length > 0 && (
+                      <div className="bg-slate-900/70 border border-white/10 rounded-xl p-4 space-y-1.5">
+                        <p className="text-xs text-slate-400 mb-2">สถานะการดึงข้อมูล</p>
+                        {canvasSteps.map((s, i) => (
+                          <div key={i} className="flex items-start gap-2 text-sm">
+                            <span className="mt-0.5 flex-shrink-0">
+                              {s.status === 'done' ? '✅' : s.status === 'error' ? '❌' : '⏳'}
+                            </span>
+                            <span className={s.status === 'error' ? 'text-red-300' : s.status === 'done' ? 'text-slate-300' : 'text-cyan-300'}>
+                              {s.label}
+                              {s.detail && <span className="text-slate-500"> — {s.detail}</span>}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
                     )}
 
                     {/* 4) Preview + บันทึก */}

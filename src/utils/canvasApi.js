@@ -129,9 +129,14 @@ function formatName(user) {
  * ดึงและประกอบข้อมูล peer review ของ assignment หนึ่ง แล้ววิเคราะห์
  * @returns ผลลัพธ์จาก buildAnalysis: { reviews, students, graders, stats }
  */
-export async function fetchPeerReviewData(config, courseId, assignmentId) {
-  // 1) assignment -> rubric (เกณฑ์) + rubric id
+export async function fetchPeerReviewData(config, courseId, assignmentId, onProgress) {
+  const report = typeof onProgress === 'function' ? onProgress : () => {};
+
+  // 1) assignment -> rubric (เกณฑ์) + rubric id  (คำขอแรก = ตรวจ token/สิทธิ์ไปในตัว)
+  report('ตรวจสอบ token + ดึงข้อมูล assignment', 'running');
   const assignment = await callProxy(config, 'assignment', { courseId, assignmentId });
+  report('ตรวจสอบ token + ดึงข้อมูล assignment', 'done', assignment?.name || '');
+
   const rubric = Array.isArray(assignment?.rubric) ? assignment.rubric : [];
   const rubricId = assignment?.rubric_settings?.id || assignment?.rubric_id || null;
 
@@ -157,7 +162,9 @@ export async function fetchPeerReviewData(config, courseId, assignmentId) {
       : 12;
 
   // 2) users -> map userId -> ชื่อ (รวมทั้งเจ้าของงานและผู้รีวิว)
+  report('ดึงรายชื่อนักศึกษา', 'running');
   const users = await callProxy(config, 'users', { courseId });
+  report('ดึงรายชื่อนักศึกษา', 'done', `${(users || []).length} คน`);
   const userMap = {};
   const userInfo = {}; // userId -> { sisId, name } (ใช้สร้างข้อมูลกลุ่ม)
   (users || []).forEach((u) => {
@@ -171,7 +178,9 @@ export async function fetchPeerReviewData(config, courseId, assignmentId) {
   });
 
   // 3) submissions -> map submissionId -> owner + เก็บ submission_comments แยกตามผู้เขียน
+  report('ดึงการส่งงาน (submissions)', 'running');
   const submissions = await callProxy(config, 'submissions', { courseId, assignmentId });
+  report('ดึงการส่งงาน (submissions)', 'done', `${(submissions || []).length} งาน`);
   const submissionOwner = {}; // submissionId -> ownerUserId
   const commentsBySubAuthor = {}; // `${submissionId}_${authorId}` -> [comment,...]
   const lateByOwner = {}; // ownerUserId -> { late, secondsLate }
@@ -196,17 +205,24 @@ export async function fetchPeerReviewData(config, courseId, assignmentId) {
   });
 
   // 4) peer reviews -> กราฟการมอบหมาย (assigned/completed) ทุกคู่ (ผู้รีวิว -> เจ้าของงาน)
+  report('ดึงการมอบหมายรีวิว (peer reviews)', 'running');
   const peerReviews = await callProxy(config, 'peer-reviews', { courseId, assignmentId });
+  report('ดึงการมอบหมายรีวิว (peer reviews)', 'done', `${(peerReviews || []).length} รายการ`);
 
   // 5) rubric peer assessments -> คะแนน + คอมเมนต์รายเกณฑ์
+  report('ดึงคะแนนรายเกณฑ์ (rubric)', 'running');
   let rubricAssessments = [];
   if (rubricId) {
     try {
       const rubricData = await callProxy(config, 'rubric', { courseId, rubricId });
       rubricAssessments = Array.isArray(rubricData?.assessments) ? rubricData.assessments : [];
+      report('ดึงคะแนนรายเกณฑ์ (rubric)', 'done', `${rubricAssessments.length} การประเมิน`);
     } catch (e) {
       console.warn('ดึง rubric assessments ไม่สำเร็จ:', e.message);
+      report('ดึงคะแนนรายเกณฑ์ (rubric)', 'error', `ดึงไม่สำเร็จ: ${e.message.slice(0, 80)} (จะขึ้นว่ายังไม่ทำ)`);
     }
+  } else {
+    report('ดึงคะแนนรายเกณฑ์ (rubric)', 'error', 'ไม่พบ rubric id');
   }
   // key: `${assessorId}_${submissionId}` -> { score, perCriterion: {criterion_id: comments} }
   const assessmentMap = {};
@@ -273,6 +289,7 @@ export async function fetchPeerReviewData(config, courseId, assignmentId) {
     throw new Error('ไม่พบข้อมูล peer review ใน assignment นี้ (ตรวจว่าเปิด peer review และมีการมอบหมายแล้ว)');
   }
 
+  report('ประมวลผลข้อมูล', 'running');
   const analysis = buildAnalysis(reviewRows, { maxScore });
   analysis.meta = {
     courseId,
@@ -281,13 +298,18 @@ export async function fetchPeerReviewData(config, courseId, assignmentId) {
     maxScore,
     pointsPossible: assignment?.points_possible ?? null,
   };
+  report('ประมวลผลข้อมูล', 'done', `${Object.keys(analysis.students).length} นักศึกษา, ${Object.keys(analysis.graders).length} graders`);
 
   // ดึงข้อมูลกลุ่มอัตโนมัติ (best-effort — ไม่ให้ล้มทั้งกระบวนการถ้ากลุ่มมีปัญหา)
+  report('ดึงข้อมูลกลุ่ม', 'running');
   try {
     analysis.groupData = await buildGroupData(config, courseId, userInfo);
+    const gc = Object.keys(analysis.groupData.groups || {}).length;
+    report('ดึงข้อมูลกลุ่ม', gc > 0 ? 'done' : 'error', gc > 0 ? `${gc} คน (${analysis.groupData.groupSets.join(', ')})` : 'ไม่พบกลุ่ม (ข้ามได้)');
   } catch (e) {
     console.warn('ดึงข้อมูลกลุ่มไม่สำเร็จ:', e.message);
     analysis.groupData = { groups: {}, groupSets: [] };
+    report('ดึงข้อมูลกลุ่ม', 'error', `ดึงไม่สำเร็จ (ข้ามได้): ${e.message.slice(0, 60)}`);
   }
 
   return analysis;
