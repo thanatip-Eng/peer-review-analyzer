@@ -12,27 +12,33 @@ export const config = { maxDuration: 60 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// fetch พร้อม retry เมื่อเจอ 5xx (เช่น 504 จาก Canvas/CloudFront) หรือ network error
-async function fetchWithRetry(url, apiKey, attempts = 4) {
+// fetch พร้อม timeout ต่อคำขอ (abort ที่ 20s) + retry เมื่อเจอ 5xx/timeout/network error
+// เพื่อไม่ให้คำขอที่ค้างกินเวลา function จนหมด
+async function fetchWithRetry(url, apiKey, attempts = 3) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000);
     try {
       const resp = await fetch(url, {
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
+        signal: controller.signal,
       });
+      clearTimeout(timer);
       // 5xx = ฝั่ง Canvas ชั่วคราว -> รอแล้วลองใหม่
       if (resp.status >= 500 && resp.status < 600 && i < attempts - 1) {
-        await sleep(600 * (i + 1));
+        await sleep(500 * (i + 1));
         continue;
       }
       return resp;
     } catch (e) {
+      clearTimeout(timer);
       lastErr = e;
       if (i < attempts - 1) {
-        await sleep(600 * (i + 1));
+        await sleep(500 * (i + 1));
         continue;
       }
       throw e;
@@ -97,10 +103,11 @@ function buildPath(resource, q) {
       // object เดี่ยว — คืน rubric (เกณฑ์) + rubric_settings.id
       return `/api/v1/courses/${courseId}/assignments/${assignmentId}`;
     case 'peer-reviews':
-      return `/api/v1/courses/${courseId}/assignments/${assignmentId}/peer_reviews?include[]=user&include[]=submission_comments&per_page=100`;
+      // ไม่ต้อง include อะไร (ใช้แค่ assessor_id/user_id/asset_id/workflow_state) -> เบา/เร็ว
+      return `/api/v1/courses/${courseId}/assignments/${assignmentId}/peer_reviews?per_page=100`;
     case 'submissions':
-      // ใช้แค่ owner mapping + submission_comments + late (ไม่ต้อง rubric_assessment เพราะดึงจาก endpoint rubric แยก)
-      return `/api/v1/courses/${courseId}/assignments/${assignmentId}/submissions?include[]=user&include[]=submission_comments&per_page=50`;
+      // ใช้แค่ owner mapping + late (ตัด submission_comments ที่หนักออก เพื่อกัน 504 กับ course ใหญ่)
+      return `/api/v1/courses/${courseId}/assignments/${assignmentId}/submissions?include[]=user&per_page=50`;
     case 'rubric':
       // object เดี่ยว — รวม peer assessments แบบ full (คะแนน+คอมเมนต์รายเกณฑ์)
       return `/api/v1/courses/${courseId}/rubrics/${rubricId}?include[]=peer_assessments&style=full`;
