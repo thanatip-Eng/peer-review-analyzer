@@ -7,9 +7,9 @@ import { getFlaggedStudents, getFlaggedGraders } from '../utils/csvParser';
 import ReviewStatusModal, { getStatusInfo, STATUS_OPTIONS } from './ReviewStatusModal';
 import TAReviewSummary from './TAReviewSummary';
 import { 
-  Users, Search, Download, ChevronRight, AlertCircle, CheckCircle2, 
+  Users, Search, Download, ChevronRight, AlertCircle, CheckCircle2,
   XCircle, AlertTriangle, UserCheck, BarChart2, FileText, ClipboardList, Filter,
-  MessageSquare, ChevronDown, ExternalLink
+  MessageSquare, ChevronDown, ExternalLink, X, Eye, Play
 } from 'lucide-react';
 
 export default function DataViewer({ semesterId, taAssignment }) {
@@ -22,6 +22,8 @@ export default function DataViewer({ semesterId, taAssignment }) {
   const [error, setError] = useState(null);
   const [semesterMeta, setSemesterMeta] = useState(null); // ข้อมูลรายการ (canvasUrl/courseId/assignmentId ไว้สร้างลิงก์)
   const [qaByGrader, setQaByGrader] = useState(null);     // sisId -> { agg, reviews[] } คะแนน Q&A (ถ้ามี)
+  const [qaDetail, setQaDetail] = useState(null);         // { graderName, agg, reviews[] } เปิดดูรายคลิป Q&A
+  const [qaThreshold, setQaThreshold] = useState(0.35);   // เกณฑ์ความคล้ายคำถามที่ใช้ตอนประมวลผล
   
   // UI state
   const [activeTab, setActiveTab] = useState('overview');
@@ -146,6 +148,10 @@ export default function DataViewer({ semesterId, taAssignment }) {
           qaSnap.docs.forEach((ds) => {
             if (ds.id.startsWith('reviewers_')) reviewers = { ...reviewers, ...ds.data().data };
             else if (ds.id.startsWith('reviews_')) reviewsArr = [...reviewsArr, ...ds.data().data];
+            else if (ds.id === 'meta') {
+              const th = ds.data()?.stats?.threshold;
+              if (typeof th === 'number') setQaThreshold(th);
+            }
           });
           if (Object.keys(reviewers).length > 0) {
             const byId = {};
@@ -1031,13 +1037,19 @@ export default function DataViewer({ semesterId, taAssignment }) {
                           if (!qa) return <td key="qa" className="px-4 py-3 text-center text-slate-600 text-xs">-</td>;
                           const a = qa.agg;
                           const color = a.qaScore >= 3 ? 'text-green-400' : a.qaScore > 0 ? 'text-amber-400' : 'text-red-400';
-                          const title = `รีวิว ${a.submitted} คลิป · ดูจริง(คำถามตรง) ${a.watched} · ตอบเป็นเนื้อ ${a.answered} · ผ่านครบ ${a.full}`;
+                          const title = `รีวิว ${a.submitted} คลิป · ดูจริง(คำถามตรง) ${a.watched} · ตอบเป็นเนื้อ ${a.answered} · ผ่านครบ ${a.full} — คลิกดูรายคลิป`;
                           return (
                             <td key="qa" className="px-4 py-3 text-center" title={title}>
-                              <span className={`font-semibold ${color}`}>{a.qaScore}/3</span>
-                              {a.flags && a.flags.includes('qa_no_match') && (
-                                <span title="ตอบแต่คำถามไม่ตรง — อาจไม่ได้ดู" className="ml-1">⚠️</span>
-                              )}
+                              <button
+                                onClick={() => setQaDetail({ graderName: grader.fullName, agg: a, reviews: qa.reviews || [] })}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-white/10 transition"
+                              >
+                                <span className={`font-semibold ${color}`}>{a.qaScore}/3</span>
+                                {a.flags && a.flags.includes('qa_no_match') && (
+                                  <span title="ตอบแต่คำถามไม่ตรง — อาจไม่ได้ดู">⚠️</span>
+                                )}
+                                <Search className="w-3.5 h-3.5 text-slate-500" />
+                              </button>
                             </td>
                           );
                         })()}
@@ -1213,6 +1225,15 @@ export default function DataViewer({ semesterId, taAssignment }) {
           }));
         }}
       />
+
+      {/* Q&A Per-Clip Detail Modal */}
+      {qaDetail && (
+        <QADetailModal
+          detail={qaDetail}
+          threshold={qaThreshold}
+          onClose={() => setQaDetail(null)}
+        />
+      )}
     </div>
   );
 }
@@ -1239,6 +1260,173 @@ function StatCard({ label, value, icon: Icon, color }) {
       </div>
       <div className="text-3xl font-bold">{value}</div>
       <div className="text-sm text-slate-400 mt-1">{label}</div>
+    </div>
+  );
+}
+
+// QADetailModal - หน้าต่างดูรายคลิป Q&A ให้ TA ตรวจคู่ที่ก้ำกึ่งด้วยตา
+function QADetailModal({ detail, threshold, onClose }) {
+  const { graderName, agg, reviews } = detail;
+  // ก้ำกึ่ง = matchScore อยู่ในแถบ ±0.1 รอบเกณฑ์ (ควรให้คนตรวจดูเอง)
+  const BORDER_BAND = 0.1;
+  const isBorderline = (m) => m != null && Math.abs(m - threshold) <= BORDER_BAND;
+
+  // เรียง: ก้ำกึ่งก่อน แล้วตามด้วย matchScore น้อย->มาก เพื่อให้ตรวจตัวที่น่าสงสัยก่อน
+  const sorted = [...(reviews || [])].sort((a, b) => {
+    const ab = isBorderline(a.matchScore) ? 0 : 1;
+    const bb = isBorderline(b.matchScore) ? 0 : 1;
+    if (ab !== bb) return ab - bb;
+    return (a.matchScore ?? -1) - (b.matchScore ?? -1);
+  });
+
+  const matchColor = (m) => {
+    if (m == null) return 'text-slate-500';
+    if (m >= threshold + BORDER_BAND) return 'text-green-400';
+    if (m >= threshold) return 'text-lime-400';
+    if (m >= threshold - BORDER_BAND) return 'text-amber-400';
+    return 'text-red-400';
+  };
+  const barColor = (m) => {
+    if (m == null) return 'bg-slate-600';
+    if (m >= threshold + BORDER_BAND) return 'bg-green-500';
+    if (m >= threshold) return 'bg-lime-500';
+    if (m >= threshold - BORDER_BAND) return 'bg-amber-500';
+    return 'bg-red-500';
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-slate-900 border border-white/15 rounded-2xl w-full max-w-4xl max-h-[88vh] flex flex-col shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between p-5 border-b border-white/10">
+          <div>
+            <h3 className="text-lg font-semibold flex items-center gap-2">
+              <Eye className="w-5 h-5 text-amber-400" />
+              ตรวจ Q&amp;A รายคลิป — {graderName}
+            </h3>
+            <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
+              <span>
+                คะแนน:{' '}
+                <span className={`font-semibold ${agg.qaScore >= 3 ? 'text-green-400' : agg.qaScore > 0 ? 'text-amber-400' : 'text-red-400'}`}>
+                  {agg.qaScore}/3
+                </span>
+              </span>
+              <span className="text-slate-400">ส่งรีวิว {agg.submitted}</span>
+              <span className="text-slate-400">ดูจริง(คำถามตรง) {agg.watched}</span>
+              <span className="text-slate-400">ตอบเป็นเนื้อ {agg.answered}</span>
+              <span className="text-slate-400">ผ่านครบ {agg.full}</span>
+              <span className="text-slate-500 text-xs">เกณฑ์คำถามตรง ≥ {threshold}</span>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Legend */}
+        <div className="px-5 py-3 border-b border-white/5 text-xs flex flex-wrap gap-x-5 gap-y-2 text-slate-400">
+          <span><span className="text-green-400">■</span> คำถามตรงชัดเจน</span>
+          <span><span className="text-amber-400">■</span> ก้ำกึ่ง (ควรตรวจด้วยตา)</span>
+          <span><span className="text-red-400">■</span> คำถามไม่ตรง</span>
+          <span className="text-slate-500">เรียงตัวก้ำกึ่ง/น่าสงสัยขึ้นก่อน</span>
+        </div>
+
+        {/* Body */}
+        <div className="overflow-y-auto p-4 space-y-3">
+          {sorted.length === 0 && (
+            <p className="text-slate-400 text-center py-8">ไม่มีข้อมูลรายคลิป</p>
+          )}
+          {sorted.map((r, i) => {
+            const border = isBorderline(r.matchScore);
+            const pct = r.matchScore == null ? 0 : Math.round(r.matchScore * 100);
+            return (
+              <div
+                key={i}
+                className={`rounded-xl border p-4 ${
+                  border ? 'border-amber-500/50 bg-amber-500/5' : 'border-white/10 bg-slate-800/40'
+                }`}
+              >
+                {/* row header */}
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Play className="w-4 h-4 text-cyan-400" />
+                    <span className="font-mono text-slate-300">คลิป {r.clipCode || '-'}</span>
+                    {r.ownerName && <span className="text-slate-400">· เจ้าของ: {r.ownerName}</span>}
+                    {border && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                        ก้ำกึ่ง
+                      </span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {r.watched
+                      ? <span className="text-xs px-2 py-0.5 rounded bg-green-900/40 text-green-300">✓ คำถามตรง</span>
+                      : <span className="text-xs px-2 py-0.5 rounded bg-red-900/40 text-red-300">✗ คำถามไม่ตรง</span>}
+                    {r.answered
+                      ? <span className="text-xs px-2 py-0.5 rounded bg-green-900/40 text-green-300">✓ ตอบเป็นเนื้อ</span>
+                      : <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-400">✗ ไม่ได้ตอบ</span>}
+                    {r.full && <span className="text-xs px-2 py-0.5 rounded bg-cyan-900/40 text-cyan-300">ผ่านครบ</span>}
+                  </div>
+                </div>
+
+                {/* match score bar */}
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="text-xs text-slate-400 w-24 shrink-0">คำถามตรงกัน</span>
+                  <div className="flex-1 h-2 bg-slate-700 rounded-full overflow-hidden">
+                    <div className={`h-full ${barColor(r.matchScore)}`} style={{ width: `${pct}%` }} />
+                  </div>
+                  <span className={`text-sm font-mono w-14 text-right ${matchColor(r.matchScore)}`}>
+                    {r.matchScore == null ? 'N/A' : r.matchScore.toFixed(2)}
+                  </span>
+                </div>
+
+                {/* questions compare */}
+                <div className="grid md:grid-cols-2 gap-3">
+                  <div className="bg-slate-900/60 rounded-lg p-3">
+                    <div className="text-xs text-slate-500 mb-1">คำถามต้นฉบับ (เจ้าของคลิป)</div>
+                    <div className="text-sm text-slate-200 whitespace-pre-wrap break-words">
+                      {r.ownerQuestion || <span className="text-slate-500 italic">— ไม่พบคำถามต้นฉบับ (ลิงก์ไม่ได้) —</span>}
+                    </div>
+                  </div>
+                  <div className="bg-slate-900/60 rounded-lg p-3">
+                    <div className="text-xs text-slate-500 mb-1">คำถามที่ผู้รีวิวถอดมา</div>
+                    <div className="text-sm text-slate-200 whitespace-pre-wrap break-words">
+                      {r.transcribedQ || <span className="text-slate-500 italic">— ว่าง —</span>}
+                    </div>
+                  </div>
+                </div>
+
+                {/* answer */}
+                <div className="mt-3 bg-slate-900/60 rounded-lg p-3">
+                  <div className="text-xs text-slate-500 mb-1">คำตอบของผู้รีวิว</div>
+                  <div className="text-sm text-slate-200 whitespace-pre-wrap break-words">
+                    {r.myAnswer || <span className="text-slate-500 italic">— ว่าง —</span>}
+                  </div>
+                </div>
+
+                {r.publish && (
+                  <div className="mt-2 text-xs text-slate-400">
+                    ควรเผยแพร่: <span className="text-slate-300">{r.publish}</span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Footer */}
+        <div className="p-4 border-t border-white/10 flex justify-end">
+          <button onClick={onClose} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm">
+            ปิด
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
