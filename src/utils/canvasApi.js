@@ -9,16 +9,15 @@ import { buildAnalysis, DEFAULT_CRITERIA } from './csvParser';
 
 export const DEFAULT_CANVAS_URL = 'https://mango-cmu.instructure.com';
 
-// เรียก proxy ฝั่ง server (token อยู่ใน body ไม่ติดใน URL)
-async function callProxy(config, resource, extra = {}) {
+// เรียก proxy ฝั่ง server ทีละหน้า -> คืน { data, next } (token อยู่ใน body ไม่ติดใน URL)
+async function callProxyPage(config, bodyExtra) {
   const resp = await fetch('/api/canvas', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       apiKey: config.apiKey,
       canvasUrl: config.canvasUrl,
-      resource,
-      ...extra,
+      ...bodyExtra,
     }),
   });
 
@@ -32,7 +31,25 @@ async function callProxy(config, resource, extra = {}) {
   if (!resp.ok) {
     throw new Error(payload.error || `เรียก Canvas ไม่สำเร็จ (${resp.status})`);
   }
-  return payload.data;
+  return payload; // { data, next }
+}
+
+// ดึงครบทุกหน้า (วน pagination ฝั่ง browser -> แต่ละคำขอเล็ก/เร็ว ไม่ชน timeout)
+async function callProxy(config, resource, extra = {}) {
+  const first = await callProxyPage(config, { resource, ...extra });
+  // resource ที่คืน object เดี่ยว (assignment, rubric) ไม่มี pagination
+  if (!Array.isArray(first.data)) return first.data;
+
+  const all = [...first.data];
+  let next = first.next;
+  let guard = 0;
+  while (next && guard < 500) {
+    guard++;
+    const page = await callProxyPage(config, { nextUrl: next });
+    if (Array.isArray(page.data)) all.push(...page.data);
+    next = page.next;
+  }
+  return all;
 }
 
 // ---- ดึงรายการ course / assignment สำหรับ dropdown ----

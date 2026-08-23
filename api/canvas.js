@@ -47,43 +47,31 @@ async function fetchWithRetry(url, apiKey, attempts = 3) {
   throw lastErr || new Error('fetch failed');
 }
 
-async function canvasFetch(baseUrl, path, apiKey) {
-  const results = [];
-  let single = null;
-  let nextUrl = `${baseUrl}${path}`;
+// ดึงแค่ "หน้าเดียว" แล้วคืน { data, next } เพื่อให้ฝั่ง browser วน pagination เอง
+// -> แต่ละ invocation ของ function เล็ก/เร็ว ไม่ชน timeout แม้ course ใหญ่
+async function fetchOnePage(url, apiKey) {
+  const resp = await fetchWithRetry(url, apiKey);
 
-  while (nextUrl) {
-    const resp = await fetchWithRetry(nextUrl, apiKey);
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => '');
+    const err = new Error(`Canvas API ${resp.status}: ${text.slice(0, 200)}`);
+    err.status = resp.status;
+    throw err;
+  }
 
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => '');
-      const err = new Error(`Canvas API ${resp.status}: ${text.slice(0, 300)}`);
-      err.status = resp.status;
-      throw err;
-    }
+  const data = await resp.json();
 
-    const data = await resp.json();
-
-    // Endpoint ที่คืน object เดี่ยว (เช่น assignment, rubric) จะไม่มี pagination
-    if (Array.isArray(data)) {
-      results.push(...data);
-    } else {
-      single = data;
-      break;
-    }
-
-    const link = resp.headers.get('link') || resp.headers.get('Link');
-    nextUrl = null;
-    if (link) {
-      const next = link.split(',').find((l) => l.includes('rel="next"'));
-      if (next) {
-        const m = next.match(/<([^>]+)>/);
-        if (m) nextUrl = m[1];
-      }
+  let next = null;
+  const link = resp.headers.get('link') || resp.headers.get('Link');
+  if (link) {
+    const nextLink = link.split(',').find((l) => l.includes('rel="next"'));
+    if (nextLink) {
+      const m = nextLink.match(/<([^>]+)>/);
+      if (m) next = m[1];
     }
   }
 
-  return single !== null ? single : results;
+  return { data, next };
 }
 
 function buildPath(resource, q) {
@@ -127,22 +115,34 @@ export default async function handler(req, res) {
   try {
     const body =
       typeof req.body === 'string' ? JSON.parse(req.body || '{}') : req.body || {};
-    const { apiKey, canvasUrl, resource } = body;
+    const { apiKey, canvasUrl, resource, nextUrl } = body;
 
-    if (!apiKey || !canvasUrl || !resource) {
-      return res
-        .status(400)
-        .json({ error: 'Missing required field: apiKey, canvasUrl, or resource' });
+    if (!apiKey || !canvasUrl) {
+      return res.status(400).json({ error: 'Missing required field: apiKey or canvasUrl' });
     }
 
     const baseUrl = String(canvasUrl).trim().replace(/\/+$/, '');
-    const path = buildPath(resource, body);
-    if (!path) {
-      return res.status(400).json({ error: `Unknown resource: ${resource}` });
+
+    let url;
+    if (nextUrl) {
+      // หน้าถัดไป (cursor จาก Link header) — ต้องเป็นโดเมนเดียวกับ canvasUrl (กัน SSRF)
+      if (!String(nextUrl).startsWith(baseUrl)) {
+        return res.status(400).json({ error: 'Invalid nextUrl' });
+      }
+      url = nextUrl;
+    } else {
+      if (!resource) {
+        return res.status(400).json({ error: 'Missing required field: resource' });
+      }
+      const path = buildPath(resource, body);
+      if (!path) {
+        return res.status(400).json({ error: `Unknown resource: ${resource}` });
+      }
+      url = `${baseUrl}${path}`;
     }
 
-    const data = await canvasFetch(baseUrl, path, apiKey);
-    return res.status(200).json({ data });
+    const { data, next } = await fetchOnePage(url, apiKey);
+    return res.status(200).json({ data, next });
   } catch (err) {
     const status = err.status || 500;
     console.error('Canvas proxy error:', err.message);
