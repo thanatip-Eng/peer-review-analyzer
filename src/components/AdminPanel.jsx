@@ -18,9 +18,10 @@ import { db, secondaryAuth } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { parseCSV } from '../utils/csvParser';
 import { fetchCourses, fetchAssignments, fetchPeerReviewData, DEFAULT_CANVAS_URL } from '../utils/canvasApi';
+import { rowsFromArrayBuffer, parseOwnerRows, parseReviewerRows, computeQA } from '../utils/qaMatcher';
 import ConfirmModal from './ConfirmModal';
 import Papa from 'papaparse';
-import { Upload, Users, UserPlus, Settings, Trash2, Edit, Save, X, ChevronRight, CheckCircle2, AlertTriangle, Eye, EyeOff, Mail, Lock, Key, Cloud, Download, RefreshCw, Clock } from 'lucide-react';
+import { Upload, Users, UserPlus, Settings, Trash2, Edit, Save, X, ChevronRight, CheckCircle2, AlertTriangle, Eye, EyeOff, Mail, Lock, Key, Cloud, Download, RefreshCw, Clock, MessageSquare } from 'lucide-react';
 
 export default function AdminPanel({ onViewData }) {
   const { currentUser } = useAuth();
@@ -68,6 +69,12 @@ export default function AdminPanel({ onViewData }) {
   const [canvasLoading, setCanvasLoading] = useState('');   // '' | 'courses' | 'assignments' | 'fetch' | 'save'
   const [canvasPreview, setCanvasPreview] = useState(null); // ผลจาก fetchPeerReviewData ก่อนบันทึก
   const [canvasSteps, setCanvasSteps] = useState([]);       // รายงานสถานะแต่ละขั้นตอนตอนดึง
+
+  // ===== Q&A (MS Form) state =====
+  const [qaOwnerFile, setQaOwnerFile] = useState(null);
+  const [qaReviewerFile, setQaReviewerFile] = useState(null);
+  const [qaProcessing, setQaProcessing] = useState('');     // '' | 'process' | 'save'
+  const [qaPreview, setQaPreview] = useState(null);         // ผลจาก computeQA ก่อนบันทึก
 
   // Confirm modal state
   const [confirmModal, setConfirmModal] = useState({
@@ -449,6 +456,80 @@ export default function AdminPanel({ onViewData }) {
       setUploadError(`บันทึกไม่สำเร็จ: ${err.message}`);
     } finally {
       setCanvasLoading('');
+    }
+  };
+
+  // ===== Q&A (MS Form) : โหลด roster (students/graders) ของรายการที่เลือกจาก Firestore =====
+  const loadRoster = async (semesterId) => {
+    const col = collection(db, 'semesters', semesterId, 'peerReviewData');
+    const snap = await getDocs(col);
+    let students = {};
+    let graders = {};
+    snap.docs.forEach((d) => {
+      const id = d.id;
+      const data = d.data();
+      if (id.startsWith('students_')) students = { ...students, ...data.data };
+      else if (id.startsWith('graders_')) graders = { ...graders, ...data.data };
+    });
+    return { students, graders };
+  };
+
+  const handleQAProcess = async () => {
+    if (!selectedSemester) { setUploadError('กรุณาเลือกรายการก่อน'); return; }
+    if (!qaOwnerFile || !qaReviewerFile) { setUploadError('กรุณาเลือกทั้ง 2 ไฟล์ (เจ้าของคลิป + ผู้รีวิว)'); return; }
+    setUploadError(null); setUploadSuccess(null); setQaPreview(null); setQaProcessing('process');
+    try {
+      const [ownerBuf, revBuf] = await Promise.all([qaOwnerFile.arrayBuffer(), qaReviewerFile.arrayBuffer()]);
+      const ownerData = parseOwnerRows(rowsFromArrayBuffer(ownerBuf));
+      const reviewerData = parseReviewerRows(rowsFromArrayBuffer(revBuf));
+      if (ownerData.length === 0 || reviewerData.length === 0) {
+        throw new Error('อ่านไฟล์ไม่พบข้อมูล (ตรวจว่าเป็นไฟล์ MS Form ที่ถูกต้อง)');
+      }
+      const { students, graders } = await loadRoster(selectedSemester);
+      if (Object.keys(students).length === 0 && Object.keys(graders).length === 0) {
+        throw new Error('รายการนี้ยังไม่มีข้อมูล Canvas (roster) — ดึง Canvas ก่อนเพื่อใช้จับคู่รหัส-ชื่อ');
+      }
+      const result = computeQA({ ownerData, reviewerData, students, graders });
+      setQaPreview(result);
+    } catch (err) {
+      console.error('QA process error:', err);
+      setUploadError(`ประมวลผล Q&A ไม่สำเร็จ: ${err.message}`);
+    } finally {
+      setQaProcessing('');
+    }
+  };
+
+  const handleQASave = async () => {
+    if (!qaPreview || !selectedSemester) { setUploadError('กรุณาประมวลผลก่อนบันทึก'); return; }
+    setUploadError(null); setQaProcessing('save');
+    try {
+      const base = 'peerQAData';
+      // 1) meta
+      await setDoc(doc(db, 'semesters', selectedSemester, base, 'meta'), {
+        stats: qaPreview.stats,
+        uploadedAt: serverTimestamp(),
+        uploadedBy: currentUser.uid,
+      });
+      // 2) reviewers (chunk)
+      const rvEntries = Object.entries(qaPreview.reviewers);
+      const CH = 150;
+      for (let i = 0; i < rvEntries.length; i += CH) {
+        const chunk = Object.fromEntries(rvEntries.slice(i, i + CH));
+        await setDoc(doc(db, 'semesters', selectedSemester, base, `reviewers_${Math.floor(i / CH)}`), { data: chunk, chunkIndex: Math.floor(i / CH) });
+      }
+      // 3) review details (chunk) — เก็บไว้ให้ตรวจ borderline ด้วยตา
+      const RD = 250;
+      for (let i = 0; i < qaPreview.reviews.length; i += RD) {
+        const chunk = qaPreview.reviews.slice(i, i + RD);
+        await setDoc(doc(db, 'semesters', selectedSemester, base, `reviews_${Math.floor(i / RD)}`), { data: chunk, chunkIndex: Math.floor(i / RD) });
+      }
+      setUploadSuccess(`บันทึกคะแนน Q&A สำเร็จ! (ผู้รีวิว ${qaPreview.stats.reviewerCount} คน, ${qaPreview.stats.reviewCount} รีวิว)`);
+      setQaPreview(null); setQaOwnerFile(null); setQaReviewerFile(null);
+    } catch (err) {
+      console.error('QA save error:', err);
+      setUploadError(`บันทึกไม่สำเร็จ: ${err.message}`);
+    } finally {
+      setQaProcessing('');
     }
   };
 
@@ -1125,6 +1206,63 @@ export default function AdminPanel({ onViewData }) {
                   )
                 )}
               </div>
+
+              {/* ===== คะแนน Q&A ท้ายคลิป (MS Form) — คะแนนแยกจาก rubric ===== */}
+              {selectedSemester && (
+                <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6">
+                  <div className="flex items-center gap-3 mb-2">
+                    <div className="w-12 h-12 bg-gradient-to-br from-amber-500 to-pink-600 rounded-xl flex items-center justify-center">
+                      <MessageSquare className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-semibold">คะแนน Q&amp;A ท้ายคลิป (MS Form)</h3>
+                      <p className="text-slate-400 text-sm">จับคู่คำถามท้ายคลิป (เจ้าของ) กับคำตอบผู้รีวิว — คะแนนแยกจาก rubric</p>
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-500 mb-4">
+                    ต้องดึงข้อมูล Canvas ของรายการนี้ก่อน (ใช้ทำ roster จับคู่รหัส-ชื่อ) แล้วอัปโหลดไฟล์ .xlsx จาก MS Form 2 ไฟล์
+                  </p>
+
+                  <div className="grid md:grid-cols-2 gap-4 mb-4">
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">1) ไฟล์เจ้าของคลิป (คำถามท้ายคลิป)</label>
+                      <input type="file" accept=".xlsx" onChange={(e) => { setQaOwnerFile(e.target.files?.[0] || null); setQaPreview(null); }}
+                        className="w-full text-sm text-slate-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-slate-700 file:text-white" />
+                      {qaOwnerFile && <div className="text-xs text-green-400 mt-1 truncate">✓ {qaOwnerFile.name}</div>}
+                    </div>
+                    <div>
+                      <label className="block text-xs text-slate-400 mb-1">2) ไฟล์ผู้รีวิว (คำตอบ Phase 2)</label>
+                      <input type="file" accept=".xlsx" onChange={(e) => { setQaReviewerFile(e.target.files?.[0] || null); setQaPreview(null); }}
+                        className="w-full text-sm text-slate-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-slate-700 file:text-white" />
+                      {qaReviewerFile && <div className="text-xs text-green-400 mt-1 truncate">✓ {qaReviewerFile.name}</div>}
+                    </div>
+                  </div>
+
+                  <button onClick={handleQAProcess} disabled={qaProcessing === 'process' || !qaOwnerFile || !qaReviewerFile}
+                    className="px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
+                    {qaProcessing === 'process' ? 'กำลังประมวลผล...' : 'ประมวลผล Q&A'}
+                  </button>
+
+                  {qaPreview && (
+                    <div className="mt-4 bg-slate-800/50 border border-amber-500/30 rounded-xl p-4">
+                      <p className="text-sm font-medium mb-2 text-amber-300">ผลการจับคู่ (ยังไม่บันทึก)</p>
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm mb-2">
+                        <div><span className="text-slate-400">ผู้รีวิว:</span> {qaPreview.stats.reviewerCount} คน</div>
+                        <div><span className="text-slate-400">รีวิวทั้งหมด:</span> {qaPreview.stats.reviewCount}</div>
+                        <div><span className="text-slate-400">จับคู่เจ้าของได้:</span> {qaPreview.stats.ownerResolvedPct}%</div>
+                        <div><span className="text-slate-400">ผ่านครบ (ดู+ตอบ):</span> {qaPreview.stats.fullCount}</div>
+                      </div>
+                      <p className="text-xs text-slate-500 mb-3">
+                        เกณฑ์ความคล้ายคำถาม ≥ {qaPreview.stats.threshold} = "ดูจริง" (คู่ที่คะแนนก้ำกึ่งดูรายละเอียดได้ในหน้า "ดูข้อมูล")
+                      </p>
+                      <button onClick={handleQASave} disabled={qaProcessing === 'save'}
+                        className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
+                        <Save className="w-4 h-4" /> {qaProcessing === 'save' ? 'กำลังบันทึก...' : 'บันทึกคะแนน Q&A'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Student Data Upload — ยังใช้ระบบเลือกเทอมเดิม */}
               {selectedSemester && (

@@ -21,6 +21,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [semesterMeta, setSemesterMeta] = useState(null); // ข้อมูลรายการ (canvasUrl/courseId/assignmentId ไว้สร้างลิงก์)
+  const [qaByGrader, setQaByGrader] = useState(null);     // sisId -> { agg, reviews[] } คะแนน Q&A (ถ้ามี)
   
   // UI state
   const [activeTab, setActiveTab] = useState('overview');
@@ -136,6 +137,31 @@ export default function DataViewer({ semesterId, taAssignment }) {
           statuses[doc.id] = doc.data();
         });
         setReviewStatuses(statuses);
+
+        // คะแนน Q&A (ถ้ามีการอัปโหลด MS Form) — จับคู่กับ grader ด้วย reviewerId (sisId)
+        try {
+          const qaSnap = await getDocs(collection(db, 'semesters', semesterId, 'peerQAData'));
+          let reviewers = {};
+          let reviewsArr = [];
+          qaSnap.docs.forEach((ds) => {
+            if (ds.id.startsWith('reviewers_')) reviewers = { ...reviewers, ...ds.data().data };
+            else if (ds.id.startsWith('reviews_')) reviewsArr = [...reviewsArr, ...ds.data().data];
+          });
+          if (Object.keys(reviewers).length > 0) {
+            const byId = {};
+            Object.values(reviewers).forEach((rv) => {
+              if (rv.reviewerId) byId[rv.reviewerId] = { agg: rv, reviews: [] };
+            });
+            reviewsArr.forEach((r) => {
+              if (r.reviewerId && byId[r.reviewerId]) byId[r.reviewerId].reviews.push(r);
+            });
+            setQaByGrader(byId);
+          } else {
+            setQaByGrader(null);
+          }
+        } catch {
+          setQaByGrader(null);
+        }
       } catch (err) {
         console.error('Error fetching data:', err);
         setError(`เกิดข้อผิดพลาด: ${err.message}`);
@@ -429,6 +455,16 @@ export default function DataViewer({ semesterId, taAssignment }) {
         'โบนัส': g.peerReviewScore.bonus,
         'คะแนนรวม': g.peerReviewScore.netScore,
         'คะแนนเต็ม': g.peerReviewScore.fullScore,
+        ...(qaByGrader ? (() => {
+          const qa = qaByGrader[g.graderId];
+          const a = qa?.agg;
+          return {
+            'Q&A (x/3)': a ? a.qaScore : '-',
+            'Q&A ดูจริง': a ? a.watched : '-',
+            'Q&A ตอบเป็นเนื้อ': a ? a.answered : '-',
+            'Q&A รีวิวที่ส่ง': a ? a.submitted : '-',
+          };
+        })() : {}),
         'Flags': g.flags.map(f => f.message).join('; '),
         'สถานะการตรวจ': statusInfo.label,
         'โน้ต': itemStatus?.note || '-',
@@ -436,7 +472,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
       };
     });
     downloadCSV(rows, 'grader-peer-review-scores');
-  }, [data, filteredGraders, selectedGroupSet, getStudentGroup, reviewStatuses]);
+  }, [data, filteredGraders, selectedGroupSet, getStudentGroup, reviewStatuses, qaByGrader]);
 
   if (loading) {
     return (
@@ -933,6 +969,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนน</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">โบนัส</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">รวม</th>
+                    {qaByGrader && <th className="px-4 py-3 text-center text-sm font-medium text-amber-400">Q&amp;A (x/3)</th>}
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">สถานะ</th>
                   </tr>
                 </thead>
@@ -989,6 +1026,21 @@ export default function DataViewer({ semesterId, taAssignment }) {
                             {pr.netScore}/{pr.fullScore}
                           </span>
                         </td>
+                        {qaByGrader && (() => {
+                          const qa = qaByGrader[grader.graderId];
+                          if (!qa) return <td key="qa" className="px-4 py-3 text-center text-slate-600 text-xs">-</td>;
+                          const a = qa.agg;
+                          const color = a.qaScore >= 3 ? 'text-green-400' : a.qaScore > 0 ? 'text-amber-400' : 'text-red-400';
+                          const title = `รีวิว ${a.submitted} คลิป · ดูจริง(คำถามตรง) ${a.watched} · ตอบเป็นเนื้อ ${a.answered} · ผ่านครบ ${a.full}`;
+                          return (
+                            <td key="qa" className="px-4 py-3 text-center" title={title}>
+                              <span className={`font-semibold ${color}`}>{a.qaScore}/3</span>
+                              {a.flags && a.flags.includes('qa_no_match') && (
+                                <span title="ตอบแต่คำถามไม่ตรง — อาจไม่ได้ดู" className="ml-1">⚠️</span>
+                              )}
+                            </td>
+                          );
+                        })()}
                         <td className="px-4 py-3 text-center">
                           <button
                             onClick={() => setStatusModal({
