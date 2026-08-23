@@ -14,11 +14,11 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // fetch พร้อม timeout ต่อคำขอ (abort ที่ 20s) + retry เมื่อเจอ 5xx/timeout/network error
 // เพื่อไม่ให้คำขอที่ค้างกินเวลา function จนหมด
-async function fetchWithRetry(url, apiKey, attempts = 3) {
+async function fetchWithRetry(url, apiKey, attempts = 2) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20000);
+    const timer = setTimeout(() => controller.abort(), 25000);
     try {
       const resp = await fetch(url, {
         headers: {
@@ -91,8 +91,8 @@ function buildPath(resource, q) {
       // object เดี่ยว — คืน rubric (เกณฑ์) + rubric_settings.id
       return `/api/v1/courses/${courseId}/assignments/${assignmentId}`;
     case 'peer-reviews':
-      // ไม่ต้อง include อะไร (ใช้แค่ assessor_id/user_id/asset_id/workflow_state) -> เบา/เร็ว
-      return `/api/v1/courses/${courseId}/assignments/${assignmentId}/peer_reviews?per_page=100`;
+      // endpoint นี้ช้ากับ assignment ใหญ่ -> หน้าเล็กลงเพื่อให้แต่ละหน้าคืนทันภายใน timeout
+      return `/api/v1/courses/${courseId}/assignments/${assignmentId}/peer_reviews?per_page=30`;
     case 'submissions':
       // ใช้แค่ owner mapping + late (ตัด submission_comments ที่หนักออก เพื่อกัน 504 กับ course ใหญ่)
       return `/api/v1/courses/${courseId}/assignments/${assignmentId}/submissions?include[]=user&per_page=50`;

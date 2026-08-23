@@ -35,18 +35,21 @@ async function callProxyPage(config, bodyExtra) {
 }
 
 // ดึงครบทุกหน้า (วน pagination ฝั่ง browser -> แต่ละคำขอเล็ก/เร็ว ไม่ชน timeout)
-async function callProxy(config, resource, extra = {}) {
+// onPage(count) เรียกหลังแต่ละหน้า เพื่อรายงานความคืบหน้าสด
+async function callProxy(config, resource, extra = {}, onPage) {
   const first = await callProxyPage(config, { resource, ...extra });
   // resource ที่คืน object เดี่ยว (assignment, rubric) ไม่มี pagination
   if (!Array.isArray(first.data)) return first.data;
 
   const all = [...first.data];
+  if (onPage) onPage(all.length);
   let next = first.next;
   let guard = 0;
-  while (next && guard < 500) {
+  while (next && guard < 2000) {
     guard++;
     const page = await callProxyPage(config, { nextUrl: next });
     if (Array.isArray(page.data)) all.push(...page.data);
+    if (onPage) onPage(all.length);
     next = page.next;
   }
   return all;
@@ -163,7 +166,7 @@ export async function fetchPeerReviewData(config, courseId, assignmentId, onProg
 
   // 2) users -> map userId -> ชื่อ (รวมทั้งเจ้าของงานและผู้รีวิว)
   report('ดึงรายชื่อนักศึกษา', 'running');
-  const users = await callProxy(config, 'users', { courseId });
+  const users = await callProxy(config, 'users', { courseId }, (n) => report('ดึงรายชื่อนักศึกษา', 'running', `${n} คน...`));
   report('ดึงรายชื่อนักศึกษา', 'done', `${(users || []).length} คน`);
   const userMap = {};
   const userInfo = {}; // userId -> { sisId, name } (ใช้สร้างข้อมูลกลุ่ม)
@@ -179,7 +182,7 @@ export async function fetchPeerReviewData(config, courseId, assignmentId, onProg
 
   // 3) submissions -> map submissionId -> owner + เก็บ submission_comments แยกตามผู้เขียน
   report('ดึงการส่งงาน (submissions)', 'running');
-  const submissions = await callProxy(config, 'submissions', { courseId, assignmentId });
+  const submissions = await callProxy(config, 'submissions', { courseId, assignmentId }, (n) => report('ดึงการส่งงาน (submissions)', 'running', `${n} งาน...`));
   report('ดึงการส่งงาน (submissions)', 'done', `${(submissions || []).length} งาน`);
   const submissionOwner = {}; // submissionId -> ownerUserId
   const commentsBySubAuthor = {}; // `${submissionId}_${authorId}` -> [comment,...]
@@ -206,7 +209,7 @@ export async function fetchPeerReviewData(config, courseId, assignmentId, onProg
 
   // 4) peer reviews -> กราฟการมอบหมาย (assigned/completed) ทุกคู่ (ผู้รีวิว -> เจ้าของงาน)
   report('ดึงการมอบหมายรีวิว (peer reviews)', 'running');
-  const peerReviews = await callProxy(config, 'peer-reviews', { courseId, assignmentId });
+  const peerReviews = await callProxy(config, 'peer-reviews', { courseId, assignmentId }, (n) => report('ดึงการมอบหมายรีวิว (peer reviews)', 'running', `${n} รายการ...`));
   report('ดึงการมอบหมายรีวิว (peer reviews)', 'done', `${(peerReviews || []).length} รายการ`);
 
   // 5) rubric peer assessments -> คะแนน + คอมเมนต์รายเกณฑ์

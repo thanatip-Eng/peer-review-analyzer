@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "api/canvas.js": {
+      "maxDuration": 60
+    }
+  }
+}
