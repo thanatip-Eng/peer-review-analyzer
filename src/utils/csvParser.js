@@ -292,8 +292,8 @@ export function buildAnalysis(reviewRows, options = {}) {
         const validCommentCount = review.hasCommentCount; // จำนวน comment ที่มี (ไม่รวม "-")
         const missingComments = review.totalCriteria - validCommentCount;
         
-        // งาน "สมบูรณ์" = ให้คะแนนแล้ว + คอมเมนต์ขาดไม่เกิน 3 ช่อง
-        const isComplete = missingComments <= 3;
+        // งาน "สมบูรณ์" = ให้คะแนนแล้วในแคนวาส (ไม่ดูจำนวนคอมเมนต์อีกต่อไป)
+        const isComplete = gradeGiven !== null;
         
         graders[graderName].peerReviewScore.details.push({
           reviewId: review.id,

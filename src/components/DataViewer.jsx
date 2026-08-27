@@ -486,7 +486,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
         ...row,
         'งานที่ได้รับ': g.assignedReviews,
         'งานที่รีวิวแล้ว': g.peerReviewScore.reviewedCount,
-        'งานสมบูรณ์': g.peerReviewScore.completeCount,
+        'งานสมบูรณ์ (ให้คะแนนแล้ว)': g.peerReviewScore.reviewedCount,
         'คะแนนพื้นฐาน (รีวิว)': g.peerReviewScore.baseScore,
         ...(() => {
           // คะแนนรวม = คุณภาพ Q&A (1/คลิป, เต็ม 3)
@@ -982,7 +982,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
             <span className="text-slate-400 font-medium">ความหมาย Flag:</span>
             <span><span className="text-yellow-400">🟡</span> รีวิวไม่ครบตามที่ได้รับ</span>
             <span><span className="text-blue-400">🔵</span> ได้รับงานไม่ครบ 3 งาน</span>
-            <span><span className="text-slate-400">งานสมบูรณ์</span> = ขาด comment ไม่เกิน 3 ช่อง (ข้อมูลประกอบ)</span>
+            <span><span className="text-slate-400">งานสมบูรณ์</span> = ให้คะแนนแล้วในแคนวาส (ข้อมูลประกอบ)</span>
           </div>
 
           <div className="bg-slate-900/50 border border-white/10 rounded-2xl overflow-hidden">
@@ -1039,8 +1039,9 @@ export default function DataViewer({ semesterId, taAssignment }) {
                           </span>
                         </td>
                         <td className="px-4 py-3 text-center">
-                          <span className={pr.completeCount === pr.reviewedCount ? 'text-green-400' : 'text-yellow-400'}>
-                            {pr.completeCount}/{pr.reviewedCount}
+                          {/* สมบูรณ์ = ให้คะแนนแล้วในแคนวาส (จำนวนที่ให้คะแนน / งานที่ได้รับ) */}
+                          <span className={pr.reviewedCount === grader.assignedReviews ? 'text-green-400' : 'text-yellow-400'}>
+                            {pr.reviewedCount}/{grader.assignedReviews}
                           </span>
                         </td>
                         <td className="px-4 py-3 text-center text-cyan-400">{pr.baseScore}</td>
