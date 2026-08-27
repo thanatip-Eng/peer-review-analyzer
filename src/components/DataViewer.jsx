@@ -60,7 +60,6 @@ export default function DataViewer({ semesterId, taAssignment }) {
   
   const [graderFilters, setGraderFilters] = useState({
     reviewCompletion: 'all', // all, complete, incomplete
-    bonusStatus: 'all', // all, hasBonus, noBonus
     reviewStatus: 'all',
     hasFlag: 'all'
   });
@@ -332,20 +331,12 @@ export default function DataViewer({ semesterId, taAssignment }) {
         matchCompletion = pr.reviewedCount < g.assignedReviews;
       }
       
-      // Bonus status filter
-      let matchBonus = true;
-      if (graderFilters.bonusStatus === 'hasBonus') {
-        matchBonus = pr.bonus > 0;
-      } else if (graderFilters.bonusStatus === 'noBonus') {
-        matchBonus = pr.bonus === 0;
-      }
-      
       // Review status filter
       let matchReviewStatus = true;
       if (graderFilters.reviewStatus !== 'all') {
         matchReviewStatus = itemStatus === graderFilters.reviewStatus;
       }
-      
+
       // Has flag filter
       let matchHasFlag = true;
       if (graderFilters.hasFlag === 'yes') {
@@ -353,10 +344,14 @@ export default function DataViewer({ semesterId, taAssignment }) {
       } else if (graderFilters.hasFlag === 'no') {
         matchHasFlag = g.flags.length === 0;
       }
-      
-      return matchSearch && matchGroup && matchCompletion && matchBonus && matchReviewStatus && matchHasFlag;
-    }).sort((a, b) => b.peerReviewScore.netScore - a.peerReviewScore.netScore);
-  }, [data, searchQuery, groupFilter, getStudentGroup, isTA, taAssignment, allowedGroups, graderFilters, reviewStatuses]);
+
+      return matchSearch && matchGroup && matchCompletion && matchReviewStatus && matchHasFlag;
+    }).sort((a, b) => {
+      // เรียงตามคะแนนรวม = Q&A (ถ้ามี) มิฉะนั้น fallback คะแนนรีวิวเดิม
+      const qs = (g) => qaByGrader ? (qaByGrader[g.graderId]?.agg.qaScore ?? -1) : g.peerReviewScore.netScore;
+      return qs(b) - qs(a);
+    });
+  }, [data, searchQuery, groupFilter, getStudentGroup, isTA, taAssignment, allowedGroups, graderFilters, reviewStatuses, qaByGrader]);
 
   const flaggedStudents = useMemo(() => data ? getFlaggedStudents(data.students) : [], [data]);
   const flaggedGraders = useMemo(() => data ? getFlaggedGraders(data.graders) : [], [data]);
@@ -395,7 +390,9 @@ export default function DataViewer({ semesterId, taAssignment }) {
       const group = getStudentGroup(g.graderId);
       if (group && stats[group]) {
         stats[group].graders.push(g);
-        stats[group].prScores.push(g.peerReviewScore.netScore);
+        // คะแนน PR = Q&A (ถ้ามี) มิฉะนั้น fallback คะแนนรีวิวเดิม
+        const prScore = qaByGrader ? (qaByGrader[g.graderId]?.agg.qaScore ?? 0) : g.peerReviewScore.netScore;
+        stats[group].prScores.push(prScore);
         if (g.flags.length > 0) {
           stats[group].flaggedCount++;
         }
@@ -413,7 +410,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
     });
     
     return stats;
-  }, [data, selectedGroupSet, groupData, allGroups, getStudentGroup, isTA, taAssignment, allowedGroups]);
+  }, [data, selectedGroupSet, groupData, allGroups, getStudentGroup, isTA, taAssignment, allowedGroups, qaByGrader]);
 
   // Export functions
   const downloadCSV = (rows, filename) => {
@@ -490,20 +487,19 @@ export default function DataViewer({ semesterId, taAssignment }) {
         'งานที่ได้รับ': g.assignedReviews,
         'งานที่รีวิวแล้ว': g.peerReviewScore.reviewedCount,
         'งานสมบูรณ์': g.peerReviewScore.completeCount,
-        'คะแนนพื้นฐาน': g.peerReviewScore.baseScore,
-        'โบนัส': g.peerReviewScore.bonus,
-        'คะแนนรวม': g.peerReviewScore.netScore,
-        'คะแนนเต็ม': g.peerReviewScore.fullScore,
-        ...(qaByGrader ? (() => {
-          const qa = qaByGrader[g.graderId];
-          const a = qa?.agg;
+        'คะแนนพื้นฐาน (รีวิว)': g.peerReviewScore.baseScore,
+        ...(() => {
+          // คะแนนรวม = คุณภาพ Q&A (1/คลิป, เต็ม 3)
+          if (!qaByGrader) return { 'คะแนนรวม (Q&A)': 'รอข้อมูล Q&A', 'คะแนนเต็ม': 3 };
+          const a = qaByGrader[g.graderId]?.agg;
           return {
-            'Q&A (x/3)': a ? a.qaScore : '-',
+            'คะแนนรวม (Q&A)': a ? a.qaScore : 0,
+            'คะแนนเต็ม': 3,
             'Q&A ดูจริง': a ? a.watched : '-',
             'Q&A ตอบเป็นเนื้อ': a ? a.answered : '-',
             'Q&A รีวิวที่ส่ง': a ? a.submitted : '-',
           };
-        })() : {}),
+        })(),
         'Flags': g.flags.map(f => f.message).join('; '),
         'สถานะการตรวจ': statusInfo.label,
         'โน้ต': itemStatus?.note || '-',
@@ -658,7 +654,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                           </span>
                         </td>
                         <td className="px-4 py-3 text-center">
-                          <span className={`font-semibold ${getScoreColor(stats.avgPRScore, 4)}`}>
+                          <span className={`font-semibold ${getScoreColor(stats.avgPRScore, 3)}`}>
                             {stats.avgPRScore.toFixed(2)}
                           </span>
                         </td>
@@ -948,18 +944,6 @@ export default function DataViewer({ semesterId, taAssignment }) {
                 </select>
               </div>
               <div>
-                <label className="block text-xs text-slate-400 mb-1">โบนัส</label>
-                <select
-                  value={graderFilters.bonusStatus}
-                  onChange={(e) => setGraderFilters(f => ({ ...f, bonusStatus: e.target.value }))}
-                  className="w-full px-3 py-2 bg-slate-700 border border-white/10 rounded-lg text-sm"
-                >
-                  <option value="all">ทั้งหมด</option>
-                  <option value="hasBonus">ได้โบนัส</option>
-                  <option value="noBonus">ไม่ได้โบนัส</option>
-                </select>
-              </div>
-              <div>
                 <label className="block text-xs text-slate-400 mb-1">สถานะการตรวจ</label>
                 <select
                   value={graderFilters.reviewStatus}
@@ -988,17 +972,17 @@ export default function DataViewer({ semesterId, taAssignment }) {
           )}
 
           <div className="bg-slate-800/50 rounded-xl p-3 text-sm flex flex-wrap gap-4">
-            <span className="text-slate-400">เงื่อนไข:</span>
-            <span>รีวิว 1 งาน = <span className="text-cyan-400">1 คะแนน</span></span>
-            <span>รีวิวครบ + ทุกงานสมบูรณ์ = <span className="text-green-400">+1 โบนัส</span></span>
+            <span className="text-slate-400">เงื่อนไขคะแนนรวม (Q&amp;A):</span>
+            <span><span className="text-green-400">1 คะแนน/คลิป</span> เมื่อถอดคำถามตรง + ตอบเป็นเนื้อ (เต็ม 3)</span>
+            <span className="text-slate-500">คลิกที่คะแนนรวมเพื่อดูรายคลิป</span>
           </div>
 
           {/* Flag Legend */}
           <div className="bg-slate-800/50 rounded-xl p-3 text-xs flex flex-wrap gap-x-6 gap-y-2">
             <span className="text-slate-400 font-medium">ความหมาย Flag:</span>
-            <span><span className="text-yellow-400">🟡</span> รีวิวไม่ครบ / ไม่ได้โบนัส</span>
+            <span><span className="text-yellow-400">🟡</span> รีวิวไม่ครบตามที่ได้รับ</span>
             <span><span className="text-blue-400">🔵</span> ได้รับงานไม่ครบ 3 งาน</span>
-            <span><span className="text-slate-400">งานสมบูรณ์</span> = ขาด comment ไม่เกิน 3 ช่อง</span>
+            <span><span className="text-slate-400">งานสมบูรณ์</span> = ขาด comment ไม่เกิน 3 ช่อง (ข้อมูลประกอบ)</span>
           </div>
 
           <div className="bg-slate-900/50 border border-white/10 rounded-2xl overflow-hidden">
@@ -1015,9 +999,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">รีวิวแล้ว</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">สมบูรณ์</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">คะแนน</th>
-                    <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">โบนัส</th>
-                    <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">รวม</th>
-                    {qaByGrader && <th className="px-4 py-3 text-center text-sm font-medium text-amber-400">Q&amp;A (x/3)</th>}
+                    <th className="px-4 py-3 text-center text-sm font-medium text-amber-400">รวม (Q&amp;A)</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">สถานะ</th>
                   </tr>
                 </thead>
@@ -1062,26 +1044,21 @@ export default function DataViewer({ semesterId, taAssignment }) {
                           </span>
                         </td>
                         <td className="px-4 py-3 text-center text-cyan-400">{pr.baseScore}</td>
-                        <td className="px-4 py-3 text-center">
-                          {pr.bonus > 0 ? (
-                            <span className="text-green-400">+{pr.bonus}</span>
-                          ) : (
-                            <span className="text-slate-500">-</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <span className={`font-semibold ${pr.netScore === pr.fullScore ? 'text-green-400' : pr.netScore > 0 ? 'text-cyan-400' : 'text-red-400'}`}>
-                            {pr.netScore}/{pr.fullScore}
-                          </span>
-                        </td>
-                        {qaByGrader && (() => {
+                        {(() => {
+                          // คะแนนรวม = คุณภาพ Q&A (1/คลิป). ทั้งเทอมยังไม่มี Q&A -> รอข้อมูล
+                          if (!qaByGrader) {
+                            return <td className="px-4 py-3 text-center text-slate-500 text-xs">— รอข้อมูล Q&amp;A</td>;
+                          }
                           const qa = qaByGrader[grader.graderId];
-                          if (!qa) return <td key="qa" className="px-4 py-3 text-center text-slate-600 text-xs">-</td>;
+                          if (!qa) {
+                            // มี Q&A ของเทอมแล้ว แต่คนนี้ไม่มี record = ไม่ได้ส่ง MS Form
+                            return <td className="px-4 py-3 text-center"><span className="font-semibold text-red-400">0/3</span></td>;
+                          }
                           const a = qa.agg;
                           const color = a.qaScore >= 3 ? 'text-green-400' : a.qaScore > 0 ? 'text-amber-400' : 'text-red-400';
                           const title = `รีวิว ${a.submitted} คลิป · ดูจริง(คำถามตรง) ${a.watched} · ตอบเป็นเนื้อ ${a.answered} · ผ่านครบ ${a.full} — คลิกดูรายคลิป`;
                           return (
-                            <td key="qa" className="px-4 py-3 text-center" title={title}>
+                            <td className="px-4 py-3 text-center" title={title}>
                               <button
                                 onClick={() => setQaDetail({ graderName: grader.fullName, agg: a, reviews: qa.reviews || [] })}
                                 className="inline-flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-white/10 transition"
