@@ -55,13 +55,15 @@ export default function DataViewer({ semesterId, taAssignment }) {
     graderStatus: 'all', // all, complete, incomplete
     scoreRange: 'all', // all, high, medium, low
     reviewStatus: 'all', // all, pending, reviewed, fixed, escalated
-    hasFlag: 'all' // all, yes, no
+    hasFlag: 'all', // all, yes, no
+    qaOwner: 'all' // all, 2, 1, 0, notSubmitted (คะแนนตอบคำถามท้ายคลิป)
   });
-  
+
   const [graderFilters, setGraderFilters] = useState({
     reviewCompletion: 'all', // all, complete, incomplete
     reviewStatus: 'all',
-    hasFlag: 'all'
+    hasFlag: 'all',
+    qaTotal: 'all' // all, 3, 2, 1, 0, noMatch (คะแนนรวม Q&A)
   });
   
   const [showFilters, setShowFilters] = useState(false);
@@ -295,10 +297,21 @@ export default function DataViewer({ semesterId, taAssignment }) {
       } else if (studentFilters.hasFlag === 'no') {
         matchHasFlag = s.flags.length === 0;
       }
-      
-      return matchSearch && matchGroup && matchGraderStatus && matchScoreRange && matchReviewStatus && matchHasFlag;
+
+      // คะแนนตอบคำถามท้ายคลิป (owner Q&A) filter
+      let matchQaOwner = true;
+      if (studentFilters.qaOwner !== 'all' && qaByOwner) {
+        const qa = qaByOwner[s.studentId];
+        if (studentFilters.qaOwner === 'notSubmitted') {
+          matchQaOwner = !qa;
+        } else {
+          matchQaOwner = !!qa && qa.score === Number(studentFilters.qaOwner);
+        }
+      }
+
+      return matchSearch && matchGroup && matchGraderStatus && matchScoreRange && matchReviewStatus && matchHasFlag && matchQaOwner;
     }).sort((a, b) => b.workScore.average - a.workScore.average);
-  }, [data, searchQuery, groupFilter, getStudentGroup, isTA, taAssignment, allowedGroups, studentFilters, reviewStatuses]);
+  }, [data, searchQuery, groupFilter, getStudentGroup, isTA, taAssignment, allowedGroups, studentFilters, reviewStatuses, qaByOwner]);
 
   // Filter graders
   const filteredGraders = useMemo(() => {
@@ -345,7 +358,18 @@ export default function DataViewer({ semesterId, taAssignment }) {
         matchHasFlag = g.flags.length === 0;
       }
 
-      return matchSearch && matchGroup && matchCompletion && matchReviewStatus && matchHasFlag;
+      // คะแนนรวม Q&A filter
+      let matchQaTotal = true;
+      if (graderFilters.qaTotal !== 'all' && qaByGrader) {
+        const agg = qaByGrader[g.graderId]?.agg;
+        if (graderFilters.qaTotal === 'noMatch') {
+          matchQaTotal = !!agg?.flags?.includes('qa_no_match');
+        } else {
+          matchQaTotal = (agg ? agg.qaScore : 0) === Number(graderFilters.qaTotal);
+        }
+      }
+
+      return matchSearch && matchGroup && matchCompletion && matchReviewStatus && matchHasFlag && matchQaTotal;
     }).sort((a, b) => {
       // เรียงตามคะแนนรวม = Q&A (ถ้ามี) มิฉะนั้น fallback คะแนนรีวิวเดิม
       const qs = (g) => qaByGrader ? (qaByGrader[g.graderId]?.agg.qaScore ?? -1) : g.peerReviewScore.netScore;
@@ -755,6 +779,22 @@ export default function DataViewer({ semesterId, taAssignment }) {
                   <option value="no">ไม่มี Flag</option>
                 </select>
               </div>
+              {qaByOwner && (
+                <div>
+                  <label className="block text-xs text-amber-400 mb-1">ตอบคำถามท้ายคลิป</label>
+                  <select
+                    value={studentFilters.qaOwner}
+                    onChange={(e) => setStudentFilters(f => ({ ...f, qaOwner: e.target.value }))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-white/10 rounded-lg text-sm"
+                  >
+                    <option value="all">ทั้งหมด</option>
+                    <option value="2">ครบ 2/2</option>
+                    <option value="1">ได้ 1</option>
+                    <option value="0">0 คะแนน</option>
+                    <option value="notSubmitted">ไม่ส่งฟอร์ม</option>
+                  </select>
+                </div>
+              )}
             </div>
           )}
 
@@ -968,6 +1008,23 @@ export default function DataViewer({ semesterId, taAssignment }) {
                   <option value="no">ไม่มี Flag</option>
                 </select>
               </div>
+              {qaByGrader && (
+                <div>
+                  <label className="block text-xs text-amber-400 mb-1">รวม Q&amp;A</label>
+                  <select
+                    value={graderFilters.qaTotal}
+                    onChange={(e) => setGraderFilters(f => ({ ...f, qaTotal: e.target.value }))}
+                    className="w-full px-3 py-2 bg-slate-700 border border-white/10 rounded-lg text-sm"
+                  >
+                    <option value="all">ทั้งหมด</option>
+                    <option value="3">ครบ 3/3</option>
+                    <option value="2">ได้ 2</option>
+                    <option value="1">ได้ 1</option>
+                    <option value="0">0 คะแนน</option>
+                    <option value="noMatch">⚠️ ตอบแต่คำถามไม่ตรง</option>
+                  </select>
+                </div>
+              )}
             </div>
           )}
 
