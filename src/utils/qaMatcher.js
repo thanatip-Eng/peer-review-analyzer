@@ -16,7 +16,14 @@ export function normName(s) {
   if (!s) return '';
   const t = String(s).toUpperCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
   // รองรับทั้ง "FIRST LAST" และ "LAST, FIRST" ด้วยการเรียง token
-  return t.split(' ').filter(Boolean).sort().join(' ');
+  // ตัด token ที่เป็นตัวเลขล้วนทิ้ง (เช่นรหัส นศ. ที่ Canvas ใส่นำหน้าชื่อ "670510370 MARIOAN KAEOTA")
+  // เพื่อให้จับคู่กับไฟล์เจ้าของที่มีแค่ชื่อได้
+  return t.split(' ').filter((x) => x && !/^\d+$/.test(x)).sort().join(' ');
+}
+
+// ตัดรหัส (ตัวเลขนำหน้า) ออกจากชื่อเต็มของ roster เพื่อการแสดงผลที่สะอาด
+function stripIdPrefix(full) {
+  return String(full || '').replace(/^\s*\d{6,10}\s+/, '').trim();
 }
 
 function normText(s) {
@@ -140,8 +147,9 @@ export function buildRoster(students, graders) {
     id = String(id || '').trim();
     full = String(full || '').trim();
     if (!id) return;
-    if (full) nameToId[normName(full)] = id;
-    if (!idToName[id]) idToName[id] = full;
+    if (full) nameToId[normName(full)] = id; // normName ตัด token ตัวเลขทิ้งอยู่แล้ว
+    const clean = stripIdPrefix(full) || full; // เก็บชื่อสะอาด (ไม่มีรหัสนำหน้า) ไว้แสดงผล
+    if (!idToName[id]) idToName[id] = clean;
   };
   Object.values(students || {}).forEach((s) => add(s.studentId, s.fullName || s.studentName));
   Object.values(graders || {}).forEach((g) => add(g.graderId, g.fullName || g.graderName));
