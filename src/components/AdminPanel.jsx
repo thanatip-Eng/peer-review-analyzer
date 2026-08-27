@@ -71,8 +71,8 @@ export default function AdminPanel({ onViewData }) {
   const [canvasSteps, setCanvasSteps] = useState([]);       // รายงานสถานะแต่ละขั้นตอนตอนดึง
 
   // ===== Q&A (MS Form) state =====
-  const [qaOwnerFile, setQaOwnerFile] = useState(null);
-  const [qaReviewerFile, setQaReviewerFile] = useState(null);
+  const [qaOwnerFiles, setQaOwnerFiles] = useState([]);        // ไฟล์เจ้าของคลิป (เลือกได้หลายไฟล์)
+  const [qaReviewerFiles, setQaReviewerFiles] = useState([]);  // ไฟล์ผู้รีวิว (เลือกได้หลายไฟล์ ถ้าถูกแบ่ง)
   const [qaProcessing, setQaProcessing] = useState('');     // '' | 'process' | 'save'
   const [qaPreview, setQaPreview] = useState(null);         // ผลจาก computeQA ก่อนบันทึก
 
@@ -476,12 +476,26 @@ export default function AdminPanel({ onViewData }) {
 
   const handleQAProcess = async () => {
     if (!selectedSemester) { setUploadError('กรุณาเลือกรายการก่อน'); return; }
-    if (!qaOwnerFile || !qaReviewerFile) { setUploadError('กรุณาเลือกทั้ง 2 ไฟล์ (เจ้าของคลิป + ผู้รีวิว)'); return; }
+    if (qaOwnerFiles.length === 0 || qaReviewerFiles.length === 0) { setUploadError('กรุณาเลือกทั้งไฟล์เจ้าของคลิป และไฟล์ผู้รีวิว (อย่างละอย่างน้อย 1 ไฟล์)'); return; }
     setUploadError(null); setUploadSuccess(null); setQaPreview(null); setQaProcessing('process');
     try {
-      const [ownerBuf, revBuf] = await Promise.all([qaOwnerFile.arrayBuffer(), qaReviewerFile.arrayBuffer()]);
-      const ownerData = parseOwnerRows(rowsFromArrayBuffer(ownerBuf));
-      const reviewerData = parseReviewerRows(rowsFromArrayBuffer(revBuf));
+      // อ่าน + parse ทุกไฟล์ แล้วรวมแถว (ไฟล์ผู้รีวิวอาจถูกแบ่งหลายไฟล์เพราะคำตอบเยอะ)
+      let ownerData = [];
+      for (const f of qaOwnerFiles) {
+        ownerData = ownerData.concat(parseOwnerRows(rowsFromArrayBuffer(await f.arrayBuffer())));
+      }
+      let reviewerRaw = [];
+      for (const f of qaReviewerFiles) {
+        reviewerRaw = reviewerRaw.concat(parseReviewerRows(rowsFromArrayBuffer(await f.arrayBuffer())));
+      }
+      // dedup แบบ exact-row — กันเผลอเลือกไฟล์ซ้ำ/ช่วงแถวทับกัน (ลบเฉพาะแถวที่เหมือนกันเป๊ะ)
+      const seen = new Set();
+      const reviewerData = reviewerRaw.filter((r) => {
+        const key = `${r.reviewerEmail}|${r.reviewerName}|${r.clipCode}|${r.transcribedQ}|${r.myAnswer}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
       if (ownerData.length === 0 || reviewerData.length === 0) {
         throw new Error('อ่านไฟล์ไม่พบข้อมูล (ตรวจว่าเป็นไฟล์ MS Form ที่ถูกต้อง)');
       }
@@ -524,7 +538,7 @@ export default function AdminPanel({ onViewData }) {
         await setDoc(doc(db, 'semesters', selectedSemester, base, `reviews_${Math.floor(i / RD)}`), { data: chunk, chunkIndex: Math.floor(i / RD) });
       }
       setUploadSuccess(`บันทึกคะแนน Q&A สำเร็จ! (ผู้รีวิว ${qaPreview.stats.reviewerCount} คน, ${qaPreview.stats.reviewCount} รีวิว)`);
-      setQaPreview(null); setQaOwnerFile(null); setQaReviewerFile(null);
+      setQaPreview(null); setQaOwnerFiles([]); setQaReviewerFiles([]);
     } catch (err) {
       console.error('QA save error:', err);
       setUploadError(`บันทึกไม่สำเร็จ: ${err.message}`);
@@ -1220,25 +1234,26 @@ export default function AdminPanel({ onViewData }) {
                     </div>
                   </div>
                   <p className="text-xs text-slate-500 mb-4">
-                    ต้องดึงข้อมูล Canvas ของรายการนี้ก่อน (ใช้ทำ roster จับคู่รหัส-ชื่อ) แล้วอัปโหลดไฟล์ .xlsx จาก MS Form 2 ไฟล์
+                    ต้องดึงข้อมูล Canvas ของรายการนี้ก่อน (ใช้ทำ roster จับคู่รหัส-ชื่อ) แล้วอัปโหลดไฟล์ .xlsx จาก MS Form — ไฟล์ผู้รีวิวเลือกได้หลายไฟล์ถ้าถูกแบ่ง
                   </p>
 
                   <div className="grid md:grid-cols-2 gap-4 mb-4">
                     <div>
                       <label className="block text-xs text-slate-400 mb-1">1) ไฟล์เจ้าของคลิป (คำถามท้ายคลิป)</label>
-                      <input type="file" accept=".xlsx" onChange={(e) => { setQaOwnerFile(e.target.files?.[0] || null); setQaPreview(null); }}
+                      <input type="file" accept=".xlsx" multiple onChange={(e) => { setQaOwnerFiles(Array.from(e.target.files || [])); setQaPreview(null); }}
                         className="w-full text-sm text-slate-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-slate-700 file:text-white" />
-                      {qaOwnerFile && <div className="text-xs text-green-400 mt-1 truncate">✓ {qaOwnerFile.name}</div>}
+                      {qaOwnerFiles.map((f, i) => <div key={i} className="text-xs text-green-400 mt-1 truncate">✓ {f.name}</div>)}
                     </div>
                     <div>
-                      <label className="block text-xs text-slate-400 mb-1">2) ไฟล์ผู้รีวิว (คำตอบ Phase 2)</label>
-                      <input type="file" accept=".xlsx" onChange={(e) => { setQaReviewerFile(e.target.files?.[0] || null); setQaPreview(null); }}
+                      <label className="block text-xs text-slate-400 mb-1">2) ไฟล์ผู้รีวิว (คำตอบ Phase 2) — เลือกได้หลายไฟล์</label>
+                      <input type="file" accept=".xlsx" multiple onChange={(e) => { setQaReviewerFiles(Array.from(e.target.files || [])); setQaPreview(null); }}
                         className="w-full text-sm text-slate-300 file:mr-3 file:px-3 file:py-1.5 file:rounded-lg file:border-0 file:bg-slate-700 file:text-white" />
-                      {qaReviewerFile && <div className="text-xs text-green-400 mt-1 truncate">✓ {qaReviewerFile.name}</div>}
+                      {qaReviewerFiles.map((f, i) => <div key={i} className="text-xs text-green-400 mt-1 truncate">✓ {f.name}</div>)}
+                      {qaReviewerFiles.length > 1 && <div className="text-xs text-slate-500 mt-1">รวม {qaReviewerFiles.length} ไฟล์</div>}
                     </div>
                   </div>
 
-                  <button onClick={handleQAProcess} disabled={qaProcessing === 'process' || !qaOwnerFile || !qaReviewerFile}
+                  <button onClick={handleQAProcess} disabled={qaProcessing === 'process' || qaOwnerFiles.length === 0 || qaReviewerFiles.length === 0}
                     className="px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
                     {qaProcessing === 'process' ? 'กำลังประมวลผล...' : 'ประมวลผล Q&A'}
                   </button>
