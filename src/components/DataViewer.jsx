@@ -724,6 +724,9 @@ export default function DataViewer({ semesterId, taAssignment }) {
             <button onClick={exportStudentScores} className="flex items-center gap-2 px-4 py-3 bg-green-600 hover:bg-green-500 rounded-xl">
               <Download className="w-5 h-5" /> Export
             </button>
+            <span className="text-sm text-slate-400 whitespace-nowrap">
+              พบ <span className="text-cyan-400 font-semibold">{filteredStudents.length}</span> รายการ
+            </span>
           </div>
 
           {/* Advanced Filters */}
@@ -966,6 +969,9 @@ export default function DataViewer({ semesterId, taAssignment }) {
             <button onClick={exportGraderScores} className="flex items-center gap-2 px-4 py-3 bg-green-600 hover:bg-green-500 rounded-xl">
               <Download className="w-5 h-5" /> Export
             </button>
+            <span className="text-sm text-slate-400 whitespace-nowrap">
+              พบ <span className="text-cyan-400 font-semibold">{filteredGraders.length}</span> รายการ
+            </span>
           </div>
 
           {/* Advanced Filters */}
