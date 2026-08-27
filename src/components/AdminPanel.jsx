@@ -537,6 +537,13 @@ export default function AdminPanel({ onViewData }) {
         const chunk = qaPreview.reviews.slice(i, i + RD);
         await setDoc(doc(db, 'semesters', selectedSemester, base, `reviews_${Math.floor(i / RD)}`), { data: chunk, chunkIndex: Math.floor(i / RD) });
       }
+      // 4) owners (chunk) — คะแนนเจ้าของคลิป (ตั้งคำถาม/ตอบเอง) key = sisId
+      const ownerEntries = Object.entries(qaPreview.owners || {});
+      const OC = 150;
+      for (let i = 0; i < ownerEntries.length; i += OC) {
+        const chunk = Object.fromEntries(ownerEntries.slice(i, i + OC));
+        await setDoc(doc(db, 'semesters', selectedSemester, base, `owners_${Math.floor(i / OC)}`), { data: chunk, chunkIndex: Math.floor(i / OC) });
+      }
       setUploadSuccess(`บันทึกคะแนน Q&A สำเร็จ! (ผู้รีวิว ${qaPreview.stats.reviewerCount} คน, ${qaPreview.stats.reviewCount} รีวิว)`);
       setQaPreview(null); setQaOwnerFiles([]); setQaReviewerFiles([]);
     } catch (err) {
@@ -1267,6 +1274,20 @@ export default function AdminPanel({ onViewData }) {
                         <div><span className="text-slate-400">จับคู่เจ้าของได้:</span> {qaPreview.stats.ownerResolvedPct}%</div>
                         <div><span className="text-slate-400">ผ่านครบ (ดู+ตอบ):</span> {qaPreview.stats.fullCount}</div>
                       </div>
+                      {qaPreview.stats.ownerCount != null && (
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm mb-2 pt-2 border-t border-white/5">
+                          <div><span className="text-slate-400">เจ้าของคลิป (ส่งฟอร์ม):</span> {qaPreview.stats.ownerCount} คน</div>
+                          <div><span className="text-slate-400">ตั้งคำถามท้ายคลิป:</span> {qaPreview.stats.ownerPosedCount}</div>
+                          <div><span className="text-slate-400">ตอบคำถามตัวเอง:</span> {qaPreview.stats.ownerAnsweredCount}</div>
+                        </div>
+                      )}
+                      {qaPreview.stats.unresolved && (
+                        <p className="text-xs text-amber-300/90 mb-2">
+                          ไม่พบคำถามต้นฉบับ (แยกสาเหตุ): เจ้าของไม่ส่งฟอร์ม {qaPreview.stats.unresolved.owner_not_submitted} ·
+                          รหัสคลิปผิด {qaPreview.stats.unresolved.bad_clipcode} ·
+                          ส่งฟอร์มแต่ลิงก์ไม่ได้ {qaPreview.stats.unresolved.linked_no_question}
+                        </p>
+                      )}
                       <p className="text-xs text-slate-500 mb-3">
                         เกณฑ์ความคล้ายคำถาม ≥ {qaPreview.stats.threshold} = "ดูจริง" (คู่ที่คะแนนก้ำกึ่งดูรายละเอียดได้ในหน้า "ดูข้อมูล")
                       </p>

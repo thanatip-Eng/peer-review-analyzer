@@ -176,9 +176,35 @@ export function computeQA({ ownerData, reviewerData, students, graders, threshol
     if (o.name) ownerQByName[normName(o.name)] = rec;
   });
 
+  // แผนที่คะแนนเจ้าของคลิป (key = sisId) + เซ็ตไว้ categorize เคส "ไม่พบคำถาม"
+  // ตั้งคำถาม 1 คะแนน + ตอบคำถามตัวเอง 1 คะแนน = เต็ม 2
+  const owners = {};
+  const ownerSubmittedIds = new Set();   // เจ้าของที่ "ส่งฟอร์ม" (resolve id ได้)
+  const ownerSubmittedNames = new Set(); // เจ้าของที่ส่งฟอร์ม (ตามชื่อ)
+  (ownerData || []).forEach((o) => {
+    const prefix = (o.email || '').split('@')[0];
+    const id = /^\d{9,10}$/.test(prefix) ? prefix : nameToId[normName(o.name)] || null;
+    const nn = o.name ? normName(o.name) : '';
+    if (nn) ownerSubmittedNames.add(nn);
+    if (id) ownerSubmittedIds.add(id);
+    if (!id) return; // ไม่มี sisId → join กับหน้าคะแนนชิ้นงานไม่ได้ (นับเป็นส่งฟอร์มแล้วผ่าน name set)
+    const posed = substantive(o.question);
+    const answered = substantive(o.ownAnswer);
+    owners[id] = {
+      ownerId: id,
+      ownerName: o.name || idToName[id] || '',
+      question: o.question || '',
+      ownAnswer: o.ownAnswer || '',
+      posed,
+      answered,
+      score: (posed ? 1 : 0) + (answered ? 1 : 0),
+    };
+  });
+
   const reviews = [];
   const reviewers = {};
   let resolvedOwner = 0;
+  const unresolved = { bad_clipcode: 0, linked_no_question: 0, owner_not_submitted: 0 };
 
   (reviewerData || []).forEach((rv) => {
     if (!rv.clipCode && !rv.reviewerName) return;
@@ -192,6 +218,20 @@ export function computeQA({ ownerData, reviewerData, students, graders, threshol
     const ownerQuestion = ownerRec ? ownerRec.question : '';
     const ownerName = ownerRec ? ownerRec.name : idToName[rv.clipCode] || '';
     if (ownerQuestion) resolvedOwner++;
+
+    // จำแนกสาเหตุที่ "ไม่พบคำถามต้นฉบับ" (ตอบข้อ #3)
+    let reason = '';
+    if (!ownerQuestion) {
+      const rosterName = idToName[rv.clipCode] ? normName(idToName[rv.clipCode]) : '';
+      if (!/^\d{9,10}$/.test(rv.clipCode)) {
+        reason = 'bad_clipcode';
+      } else if (ownerSubmittedIds.has(rv.clipCode) || (rosterName && ownerSubmittedNames.has(rosterName))) {
+        reason = 'linked_no_question';
+      } else {
+        reason = 'owner_not_submitted';
+      }
+      unresolved[reason] = (unresolved[reason] || 0) + 1;
+    }
 
     // ผูกผู้รีวิวกับ grader เดิม
     const rPrefix = (rv.reviewerEmail || '').split('@')[0];
@@ -217,6 +257,7 @@ export function computeQA({ ownerData, reviewerData, students, graders, threshol
       answered,
       full,
       publish: rv.publish,
+      reason, // '' ถ้าเจอคำถาม, else bad_clipcode|linked_no_question|owner_not_submitted
     });
 
     if (!reviewers[reviewerKey]) {
@@ -246,6 +287,7 @@ export function computeQA({ ownerData, reviewerData, students, graders, threshol
     if (a.full < QA_REVIEW_TARGET) a.flags.push('qa_incomplete');
   });
 
+  const ownerList = Object.values(owners);
   const stats = {
     reviewerCount: Object.keys(reviewers).length,
     reviewCount: reviews.length,
@@ -254,7 +296,11 @@ export function computeQA({ ownerData, reviewerData, students, graders, threshol
     fullCount: reviews.filter((r) => r.full).length,
     threshold,
     target: QA_REVIEW_TARGET,
+    unresolved, // เคส "ไม่พบคำถามต้นฉบับ" แยกตามสาเหตุ
+    ownerCount: ownerList.length,
+    ownerPosedCount: ownerList.filter((o) => o.posed).length,
+    ownerAnsweredCount: ownerList.filter((o) => o.answered).length,
   };
 
-  return { reviews, reviewers, stats };
+  return { reviews, reviewers, owners, stats };
 }

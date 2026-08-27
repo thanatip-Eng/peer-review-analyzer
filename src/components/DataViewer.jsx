@@ -12,6 +12,13 @@ import {
   MessageSquare, ChevronDown, ExternalLink, X, Eye, Play
 } from 'lucide-react';
 
+// เหตุผลที่ "ไม่พบคำถามต้นฉบับ" (จาก computeQA.reason)
+const QA_REASON_LABEL = {
+  owner_not_submitted: 'เจ้าของไม่ส่งฟอร์ม',
+  bad_clipcode: 'รหัสคลิปผิดรูปแบบ',
+  linked_no_question: 'ส่งฟอร์มแต่ลิงก์ไม่ได้',
+};
+
 export default function DataViewer({ semesterId, taAssignment }) {
   const { isAdmin, isTA } = useAuth();
   const [data, setData] = useState(null);
@@ -24,6 +31,8 @@ export default function DataViewer({ semesterId, taAssignment }) {
   const [qaByGrader, setQaByGrader] = useState(null);     // sisId -> { agg, reviews[] } คะแนน Q&A (ถ้ามี)
   const [qaDetail, setQaDetail] = useState(null);         // { graderName, agg, reviews[] } เปิดดูรายคลิป Q&A
   const [qaThreshold, setQaThreshold] = useState(0.35);   // เกณฑ์ความคล้ายคำถามที่ใช้ตอนประมวลผล
+  const [qaByOwner, setQaByOwner] = useState(null);       // sisId -> คะแนนเจ้าของคลิป (ตั้งคำถาม/ตอบเอง)
+  const [reviewsByClip, setReviewsByClip] = useState(null); // sisId(เจ้าของ) -> [{reviewerName, transcribedQ}]
   
   // UI state
   const [activeTab, setActiveTab] = useState('overview');
@@ -145,9 +154,11 @@ export default function DataViewer({ semesterId, taAssignment }) {
           const qaSnap = await getDocs(collection(db, 'semesters', semesterId, 'peerQAData'));
           let reviewers = {};
           let reviewsArr = [];
+          let owners = {};
           qaSnap.docs.forEach((ds) => {
             if (ds.id.startsWith('reviewers_')) reviewers = { ...reviewers, ...ds.data().data };
             else if (ds.id.startsWith('reviews_')) reviewsArr = [...reviewsArr, ...ds.data().data];
+            else if (ds.id.startsWith('owners_')) owners = { ...owners, ...ds.data().data };
             else if (ds.id === 'meta') {
               const th = ds.data()?.stats?.threshold;
               if (typeof th === 'number') setQaThreshold(th);
@@ -165,8 +176,22 @@ export default function DataViewer({ semesterId, taAssignment }) {
           } else {
             setQaByGrader(null);
           }
+          // คะแนนเจ้าของคลิป + จัดกลุ่มรีวิวตามรหัสคลิป (เจ้าของ) ไว้ทำ tooltip หน้าคะแนนชิ้นงาน
+          setQaByOwner(Object.keys(owners).length > 0 ? owners : null);
+          if (reviewsArr.length > 0) {
+            const byClip = {};
+            reviewsArr.forEach((r) => {
+              if (!r.clipCode) return;
+              (byClip[r.clipCode] = byClip[r.clipCode] || []).push({ reviewerName: r.reviewerName, transcribedQ: r.transcribedQ });
+            });
+            setReviewsByClip(byClip);
+          } else {
+            setReviewsByClip(null);
+          }
         } catch {
           setQaByGrader(null);
+          setQaByOwner(null);
+          setReviewsByClip(null);
         }
       } catch (err) {
         console.error('Error fetching data:', err);
@@ -428,6 +453,14 @@ export default function DataViewer({ semesterId, taAssignment }) {
         'คะแนนสูงสุด': s.workScore.max || '-',
         'SD': s.workScore.stdDev,
         'เชื่อถือได้': s.workScore.isReliable ? 'ใช่' : 'ไม่',
+        ...(qaByOwner ? (() => {
+          const qa = qaByOwner[s.studentId];
+          return {
+            'ตอบคำถามท้ายคลิป (x/2)': qa ? qa.score : 'ไม่ส่งฟอร์ม',
+            'ตั้งคำถาม': qa ? (qa.posed ? 'ใช่' : 'ไม่') : '-',
+            'ตอบเอง': qa ? (qa.answered ? 'ใช่' : 'ไม่') : '-',
+          };
+        })() : {}),
         'Flags': s.flags.map(f => f.message).join('; '),
         'สถานะการตรวจ': statusInfo.label,
         'โน้ต': itemStatus?.note || '-',
@@ -435,7 +468,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
       };
     });
     downloadCSV(rows, 'student-work-scores');
-  }, [data, filteredStudents, selectedGroupSet, getStudentGroup, reviewStatuses]);
+  }, [data, filteredStudents, selectedGroupSet, getStudentGroup, reviewStatuses, qaByOwner]);
 
   const exportGraderScores = useCallback(() => {
     if (!data) return;
@@ -753,6 +786,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">Min-Max</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">SD</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">เชื่อถือได้</th>
+                    {qaByOwner && <th className="px-4 py-3 text-center text-sm font-medium text-amber-400">ตอบคำถามท้ายคลิป (x/2)</th>}
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">สถานะ</th>
                   </tr>
                 </thead>
@@ -798,11 +832,19 @@ export default function DataViewer({ semesterId, taAssignment }) {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-center">
-                        {student.workScore.isReliable 
+                        {student.workScore.isReliable
                           ? <CheckCircle2 className="w-5 h-5 text-green-400 mx-auto" />
                           : <XCircle className="w-5 h-5 text-slate-500 mx-auto" />
                         }
                       </td>
+                      {qaByOwner && (
+                        <td className="px-4 py-3 text-center">
+                          <OwnerQATooltip
+                            qa={qaByOwner[student.studentId]}
+                            reviews={(reviewsByClip && reviewsByClip[student.studentId]) || []}
+                          />
+                        </td>
+                      )}
                       <td className="px-4 py-3 text-center">
                         <div className="flex items-center justify-center gap-2">
                           <button
@@ -1391,7 +1433,7 @@ function QADetailModal({ detail, threshold, onClose }) {
                   <div className="bg-slate-900/60 rounded-lg p-3">
                     <div className="text-xs text-slate-500 mb-1">คำถามต้นฉบับ (เจ้าของคลิป)</div>
                     <div className="text-sm text-slate-200 whitespace-pre-wrap break-words">
-                      {r.ownerQuestion || <span className="text-slate-500 italic">— ไม่พบคำถามต้นฉบับ (ลิงก์ไม่ได้) —</span>}
+                      {r.ownerQuestion || <span className="text-slate-500 italic">— ไม่พบคำถามต้นฉบับ ({QA_REASON_LABEL[r.reason] || 'ลิงก์ไม่ได้'}) —</span>}
                     </div>
                   </div>
                   <div className="bg-slate-900/60 rounded-lg p-3">
@@ -1427,6 +1469,79 @@ function QADetailModal({ detail, threshold, onClose }) {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// OwnerQATooltip - คะแนน "ตอบคำถามท้ายคลิป" ของเจ้าของ + hover ดูคำถาม/ผู้รีวิว
+function OwnerQATooltip({ qa, reviews }) {
+  const [open, setOpen] = useState(false);
+  const score = qa ? qa.score : 0;
+  const scoreColor = !qa ? 'text-red-400' : score >= 2 ? 'text-green-400' : score === 1 ? 'text-amber-400' : 'text-red-400';
+
+  return (
+    <div className="relative inline-block">
+      <button
+        onMouseEnter={() => setOpen(true)}
+        onMouseLeave={() => setOpen(false)}
+        onClick={() => setOpen((v) => !v)}
+        className="px-2 py-1 rounded-lg hover:bg-white/10 transition"
+      >
+        {qa ? (
+          <span className={`font-semibold ${scoreColor}`}>{score}/2</span>
+        ) : (
+          <span className="text-xs text-red-400">ไม่ส่งฟอร์ม</span>
+        )}
+      </button>
+
+      {open && (
+        <div className="absolute z-50 right-0 top-full mt-1 w-80 bg-slate-900 border border-white/20 rounded-xl shadow-xl p-3 space-y-2 text-left">
+          {/* คะแนนแยก */}
+          <div className="flex flex-wrap gap-2 text-xs">
+            <span className={`px-2 py-0.5 rounded ${qa?.posed ? 'bg-green-900/40 text-green-300' : 'bg-slate-700 text-slate-400'}`}>
+              {qa?.posed ? '✓' : '✗'} ตั้งคำถาม
+            </span>
+            <span className={`px-2 py-0.5 rounded ${qa?.answered ? 'bg-green-900/40 text-green-300' : 'bg-red-900/40 text-red-300'}`}>
+              {qa?.answered ? '✓ ตอบเอง' : 'ไม่ตอบ'}
+            </span>
+          </div>
+
+          {/* คำถามท้ายคลิป */}
+          <div>
+            <div className="text-xs text-slate-500 mb-0.5">คำถามท้ายคลิป (เจ้าของระบุ)</div>
+            <div className="text-xs text-slate-200 whitespace-pre-wrap break-words">
+              {qa?.question || <span className="text-slate-500 italic">— ไม่ได้ตั้งคำถาม / ไม่ส่งฟอร์ม —</span>}
+            </div>
+          </div>
+
+          {/* คำตอบเจ้าของ */}
+          {qa && (
+            <div>
+              <div className="text-xs text-slate-500 mb-0.5">คำตอบของเจ้าของ</div>
+              <div className="text-xs text-slate-200 whitespace-pre-wrap break-words">
+                {qa.answered ? qa.ownAnswer : <span className="text-red-300 italic">ไม่ตอบ</span>}
+              </div>
+            </div>
+          )}
+
+          {/* ผู้รีวิว */}
+          <div>
+            <div className="text-xs text-slate-500 mb-1">ผู้รีวิวคลิปนี้ ({reviews.length} คน)</div>
+            {reviews.length === 0 ? (
+              <div className="text-xs text-slate-500 italic">ยังไม่มีผู้รีวิว</div>
+            ) : (
+              <div className="space-y-1 max-h-40 overflow-y-auto">
+                {reviews.map((r, i) => (
+                  <div key={i} className="text-xs bg-slate-800/60 rounded p-1.5">
+                    <div className="text-slate-300">{r.reviewerName || '(ไม่ทราบชื่อ)'}</div>
+                    <div className="text-slate-400">ถอดคำถาม: {r.transcribedQ || <span className="italic text-slate-500">— ว่าง —</span>}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
