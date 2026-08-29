@@ -170,6 +170,12 @@ service cloud.firestore {
         allow read: if isLoggedIn() && (isAdmin() || isTA());
         allow write: if isAdmin() || isTA();
       }
+
+      // Sub-collection: clipScoreOverrides (TA ใส่คะแนนคลิปสิ้นสุด)
+      match /clipScoreOverrides/{docId} {
+        allow read: if isLoggedIn() && (isAdmin() || isTA());
+        allow write: if isAdmin() || isTA();
+      }
     }
     
     // Collection: taAssignments

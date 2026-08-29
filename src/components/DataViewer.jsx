@@ -34,6 +34,9 @@ export default function DataViewer({ semesterId, taAssignment }) {
   const [qaByOwner, setQaByOwner] = useState(null);       // sisId -> คะแนนเจ้าของคลิป (ตั้งคำถาม/ตอบเอง)
   const [reviewsByClip, setReviewsByClip] = useState(null); // sisId(เจ้าของ) -> [{reviewerName, transcribedQ}]
   const [qaOverrides, setQaOverrides] = useState({});     // `${reviewerId}__${clipCode}` -> { score:0|1, ... } TA แก้คะแนนรีวิว
+  const [clipOverrides, setClipOverrides] = useState({}); // studentId -> { taScore, ... } คะแนนคลิปที่ TA ให้
+  const [clipModal, setClipModal] = useState(null);       // { student } เปิดให้ TA ใส่คะแนนคลิป
+  const [canvasExportOpen, setCanvasExportOpen] = useState(false); // modal ส่งออก Canvas
   
   // UI state
   const [activeTab, setActiveTab] = useState('overview');
@@ -57,7 +60,8 @@ export default function DataViewer({ semesterId, taAssignment }) {
     scoreRange: 'all', // all, high, medium, low
     reviewStatus: 'all', // all, pending, reviewed, fixed, escalated
     hasFlag: 'all', // all, yes, no
-    qaOwner: 'all' // all, 2, 1, 0, notSubmitted (คะแนนตอบคำถามท้ายคลิป)
+    qaOwner: 'all', // all, 2, 1, 0, notSubmitted (คะแนนตอบคำถามท้ายคลิป)
+    clipReview: 'all' // all, needsTA, auto, pending (คะแนนคลิปสิ้นสุด)
   });
 
   const [graderFilters, setGraderFilters] = useState({
@@ -205,6 +209,16 @@ export default function DataViewer({ semesterId, taAssignment }) {
         } catch {
           setQaOverrides({});
         }
+
+        // TA overrides คะแนนคลิป (คะแนนสิ้นสุด)
+        try {
+          const cSnap = await getDocs(collection(db, 'semesters', semesterId, 'clipScoreOverrides'));
+          const cov = {};
+          cSnap.docs.forEach((d) => { cov[d.id] = d.data(); });
+          setClipOverrides(cov);
+        } catch {
+          setClipOverrides({});
+        }
       } catch (err) {
         console.error('Error fetching data:', err);
         setError(`เกิดข้อผิดพลาด: ${err.message}`);
@@ -278,6 +292,95 @@ export default function DataViewer({ semesterId, taAssignment }) {
     await setDoc(doc(db, 'semesters', semesterId, 'qaReviewOverrides', key), payload, { merge: true });
     setQaOverrides(prev => ({ ...prev, [key]: { ...prev[key], ...payload } }));
   }, [semesterId, currentUser, userData]);
+
+  // ===== คะแนนคลิป "สิ้นสุด" (เกณฑ์: กระจาย = max−min > 2) =====
+  const SPREAD_LIMIT = 2;
+  const clipFinal = useCallback((student) => {
+    const ws = student.workScore || {};
+    const grades = (ws.grades || []).filter(g => g != null && !isNaN(g));
+    const n = grades.length;
+    const taScore = clipOverrides[student.studentId]?.taScore;
+    const hasTa = taScore != null && !isNaN(taScore);
+    // auto: รีวิว ≥ 3 และคะแนนไม่กระจาย
+    if (n >= 3 && (ws.range ?? (Math.max(...grades) - Math.min(...grades))) <= SPREAD_LIMIT) {
+      return { status: 'auto', final: ws.max, needsTA: false, hasTa };
+    }
+    // needsTA
+    if (!hasTa) return { status: 'pending', final: null, needsTA: true, hasTa: false };
+    if (n === 2) {
+      const combined = [...grades, Number(taScore)];
+      const cRange = Math.max(...combined) - Math.min(...combined);
+      return { status: 'ta', final: cRange <= SPREAD_LIMIT ? Math.max(...combined) : Number(taScore), needsTA: true, hasTa: true };
+    }
+    // 1 รีวิว หรือ 3+ กระจาย หรือไม่มีรีวิว → ใช้คะแนน TA
+    return { status: 'ta', final: Number(taScore), needsTA: true, hasTa: true };
+  }, [clipOverrides]);
+
+  // คะแนนผู้รีวิวรายคน + ชื่อ (จาก graders' details) ของ นศ. เจ้าของงาน
+  const reviewerScoresFor = useCallback((student) => {
+    if (!data?.graders) return [];
+    const out = [];
+    Object.values(data.graders).forEach(g => {
+      (g.peerReviewScore?.details || []).forEach(d => {
+        if (d.studentId === student.studentId || d.studentReviewed === student.studentName) {
+          out.push({ graderName: g.fullName || g.graderName, graderId: g.graderId, gradeGiven: d.gradeGiven });
+        }
+      });
+    });
+    return out;
+  }, [data]);
+
+  const saveClipOverride = useCallback(async (studentId, taScore, note) => {
+    if (!semesterId || !studentId) return;
+    const payload = {
+      studentId,
+      taScore: taScore == null || taScore === '' ? null : Number(taScore),
+      note: note || '',
+      updatedBy: currentUser?.uid || '',
+      updatedByName: userData?.displayName || currentUser?.email || '',
+      updatedAt: serverTimestamp(),
+    };
+    await setDoc(doc(db, 'semesters', semesterId, 'clipScoreOverrides', studentId), payload, { merge: true });
+    setClipOverrides(prev => ({ ...prev, [studentId]: { ...prev[studentId], ...payload } }));
+  }, [semesterId, currentUser, userData]);
+
+  // student object ตาม sisId (data.students คีย์ด้วย "sisId ชื่อ")
+  const studentsById = useMemo(() => {
+    const m = {};
+    if (data?.students) Object.values(data.students).forEach(s => { if (s.studentId) m[s.studentId] = s; });
+    return m;
+  }, [data]);
+
+  // รวมคนสำหรับ export Canvas (union students∪graders by sisId) + คะแนน 3 อย่าง (เคารพขอบเขต TA)
+  const exportPeople = useMemo(() => {
+    if (!data) return [];
+    const map = {};
+    const add = (id, name, canvasId) => {
+      id = String(id || '').trim(); if (!id) return;
+      if (!map[id]) map[id] = { sisId: id, name: name || '', canvasUserId: canvasId ?? null };
+      else { if (!map[id].name && name) map[id].name = name; if (map[id].canvasUserId == null && canvasId != null) map[id].canvasUserId = canvasId; }
+    };
+    Object.values(data.students).forEach(s => add(s.studentId, s.fullName, s.canvasUserId));
+    Object.values(data.graders).forEach(g => add(g.graderId, g.fullName, g.canvasUserId));
+    const inScope = (id) => {
+      if (isAdmin || taAssignment?.canViewAll || !isTA) return true;
+      if (allowedGroups.length === 0) return true;
+      return allowedGroups.includes(getStudentGroup(id));
+    };
+    return Object.values(map)
+      .filter(p => inScope(p.sisId))
+      .map(p => {
+        const st = studentsById[p.sisId];
+        const clip = st ? clipFinal(st).final : null;
+        return {
+          ...p,
+          clip: clip == null ? '' : clip,
+          ownerQa: qaByOwner?.[p.sisId]?.score ?? '',
+          peer: graderQaTotal(p.sisId) ?? '',
+        };
+      })
+      .sort((a, b) => a.sisId.localeCompare(b.sisId));
+  }, [data, studentsById, clipFinal, qaByOwner, graderQaTotal, isAdmin, isTA, taAssignment, allowedGroups, getStudentGroup]);
 
   // จำนวนงานที่ TA ส่งต่อ Admin (ยังไม่ปิด) — ไว้โชว์ badge
   const escalatedCount = useMemo(
@@ -359,9 +462,18 @@ export default function DataViewer({ semesterId, taAssignment }) {
         }
       }
 
-      return matchSearch && matchGroup && matchGraderStatus && matchScoreRange && matchReviewStatus && matchHasFlag && matchQaOwner;
+      // คะแนนคลิปสิ้นสุด filter
+      let matchClip = true;
+      if (studentFilters.clipReview !== 'all') {
+        const cf = clipFinal(s);
+        if (studentFilters.clipReview === 'needsTA') matchClip = cf.needsTA;
+        else if (studentFilters.clipReview === 'auto') matchClip = cf.status === 'auto';
+        else if (studentFilters.clipReview === 'pending') matchClip = cf.status === 'pending';
+      }
+
+      return matchSearch && matchGroup && matchGraderStatus && matchScoreRange && matchReviewStatus && matchHasFlag && matchQaOwner && matchClip;
     }).sort((a, b) => b.workScore.average - a.workScore.average);
-  }, [data, searchQuery, groupFilter, getStudentGroup, isTA, taAssignment, allowedGroups, studentFilters, reviewStatuses, qaByOwner]);
+  }, [data, searchQuery, groupFilter, getStudentGroup, isTA, taAssignment, allowedGroups, studentFilters, reviewStatuses, qaByOwner, clipFinal]);
 
   // Filter graders
   const filteredGraders = useMemo(() => {
@@ -524,6 +636,13 @@ export default function DataViewer({ semesterId, taAssignment }) {
         'คะแนนสูงสุด': s.workScore.max || '-',
         'SD': s.workScore.stdDev,
         'เชื่อถือได้': s.workScore.isReliable ? 'ใช่' : 'ไม่',
+        ...(() => {
+          const cf = clipFinal(s);
+          return {
+            'คะแนนสิ้นสุด': cf.final == null ? 'รอ TA' : cf.final,
+            'ที่มาคะแนนคลิป': cf.status === 'auto' ? 'อัตโนมัติ(Max)' : cf.status === 'ta' ? 'TA' : 'รอตรวจ',
+          };
+        })(),
         ...(qaByOwner ? (() => {
           const qa = qaByOwner[s.studentId];
           return {
@@ -539,7 +658,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
       };
     });
     downloadCSV(rows, 'student-work-scores');
-  }, [data, filteredStudents, selectedGroupSet, getStudentGroup, reviewStatuses, qaByOwner]);
+  }, [data, filteredStudents, selectedGroupSet, getStudentGroup, reviewStatuses, qaByOwner, clipFinal]);
 
   const exportGraderScores = useCallback(() => {
     if (!data) return;
@@ -701,6 +820,20 @@ export default function DataViewer({ semesterId, taAssignment }) {
             <StatCard label="รีวิวที่ยังไม่เสร็จ" value={data.stats.incompleteReviews} icon={XCircle} color="red" />
           </div>
 
+          {/* ส่งออกคะแนนเข้า Canvas */}
+          <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h3 className="font-semibold flex items-center gap-2"><Download className="w-5 h-5 text-green-400" /> ส่งออกคะแนนเข้า Canvas</h3>
+              <p className="text-sm text-slate-400 mt-1">รวมคะแนนคลิปสิ้นสุด + Q&amp;A เจ้าของ + Peer Review เป็นไฟล์ CSV สำหรับ import กลับ Canvas ({exportPeople.length} คน)</p>
+            </div>
+            <button
+              onClick={() => setCanvasExportOpen(true)}
+              className="px-4 py-2.5 bg-green-600 hover:bg-green-500 rounded-xl font-medium flex items-center gap-2"
+            >
+              <Download className="w-5 h-5" /> ส่งออกเข้า Canvas (CSV)
+            </button>
+          </div>
+
           {/* Group Stats */}
           {groupStats && Object.keys(groupStats).length > 0 && (
             <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6">
@@ -849,6 +982,19 @@ export default function DataViewer({ semesterId, taAssignment }) {
                   </select>
                 </div>
               )}
+              <div>
+                <label className="block text-xs text-purple-300 mb-1">คะแนนคลิปสิ้นสุด</label>
+                <select
+                  value={studentFilters.clipReview}
+                  onChange={(e) => setStudentFilters(f => ({ ...f, clipReview: e.target.value }))}
+                  className="w-full px-3 py-2 bg-slate-700 border border-white/10 rounded-lg text-sm"
+                >
+                  <option value="all">ทั้งหมด</option>
+                  <option value="needsTA">ต้องให้ TA ตรวจ</option>
+                  <option value="pending">รอ TA ใส่คะแนน</option>
+                  <option value="auto">อัตโนมัติ (Max)</option>
+                </select>
+              </div>
             </div>
           )}
 
@@ -876,6 +1022,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">Min-Max</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">SD</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">เชื่อถือได้</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-purple-300">คะแนนสิ้นสุด</th>
                     {qaByOwner && <th className="px-4 py-3 text-center text-sm font-medium text-amber-400">ตอบคำถามท้ายคลิป (x/2)</th>}
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">สถานะ</th>
                   </tr>
@@ -927,6 +1074,36 @@ export default function DataViewer({ semesterId, taAssignment }) {
                           : <XCircle className="w-5 h-5 text-slate-500 mx-auto" />
                         }
                       </td>
+                      {(() => {
+                        const cf = clipFinal(student);
+                        const maxSc = data?.stats?.maxScore || 12;
+                        if (cf.status === 'pending') {
+                          return (
+                            <td className="px-4 py-3 text-center">
+                              <button
+                                onClick={() => (isAdmin || isTA) && setClipModal({ student })}
+                                className="px-2 py-1 rounded text-xs bg-red-900/40 text-red-300 hover:bg-red-800/50 transition"
+                                title="คะแนนกระจาย/รีวิวไม่ครบ 3 — คลิกเพื่อให้ TA ใส่คะแนน"
+                              >
+                                รอตรวจ
+                              </button>
+                            </td>
+                          );
+                        }
+                        const color = cf.status === 'auto' ? 'text-green-400' : 'text-purple-300';
+                        return (
+                          <td className="px-4 py-3 text-center">
+                            <button
+                              onClick={() => (isAdmin || isTA) && setClipModal({ student })}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-white/10 transition"
+                              title={cf.status === 'auto' ? 'อัตโนมัติ (Max) — คลิกเพื่อดู/แก้' : 'คะแนนจาก TA — คลิกเพื่อดู/แก้'}
+                            >
+                              <span className={`font-semibold ${color}`}>{cf.final}/{maxSc}</span>
+                              {cf.status === 'ta' && <span title="คะแนนจาก TA">✏️</span>}
+                            </button>
+                          </td>
+                        );
+                      })()}
                       {qaByOwner && (
                         <td className="px-4 py-3 text-center">
                           <OwnerQATooltip
@@ -1387,6 +1564,32 @@ export default function DataViewer({ semesterId, taAssignment }) {
           onClose={() => setQaDetail(null)}
         />
       )}
+
+      {/* Clip Score Modal (TA ใส่คะแนนคลิป) */}
+      {clipModal && (
+        <ClipScoreModal
+          student={clipModal.student}
+          maxScore={data?.stats?.maxScore || 12}
+          canEdit={isAdmin || isTA}
+          info={clipFinal(clipModal.student)}
+          reviewerScores={reviewerScoresFor(clipModal.student)}
+          currentTa={clipOverrides[clipModal.student.studentId]}
+          clipLink={getCanvasLink(clipModal.student.canvasUserId)}
+          onSave={saveClipOverride}
+          onClose={() => setClipModal(null)}
+        />
+      )}
+
+      {/* Canvas Export Modal */}
+      {canvasExportOpen && (
+        <CanvasExportModal
+          semesterId={semesterId}
+          semesterMeta={semesterMeta}
+          maxScore={data?.stats?.maxScore || 12}
+          people={exportPeople}
+          onClose={() => setCanvasExportOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -1751,8 +1954,8 @@ function FlagTooltip({ flags }) {
             พบ {flags.length} รายการที่ต้องตรวจสอบ
           </div>
           {flags.map((flag, i) => (
-            <div 
-              key={i} 
+            <div
+              key={i}
               className={`text-xs p-2 rounded-lg border ${getSeverityColor(flag.severity)}`}
             >
               <span className="mr-1">{getSeverityIcon(flag.severity)}</span>
@@ -1761,6 +1964,172 @@ function FlagTooltip({ flags }) {
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ClipScoreModal - ให้ TA ดูคะแนนผู้รีวิว + ใส่คะแนนคลิป (คะแนนสิ้นสุด)
+function ClipScoreModal({ student, maxScore, canEdit, info, reviewerScores, currentTa, clipLink, onSave, onClose }) {
+  const [val, setVal] = useState(currentTa?.taScore != null ? String(currentTa.taScore) : '');
+  const [note, setNote] = useState(currentTa?.note || '');
+  const [saving, setSaving] = useState(false);
+
+  const doSave = async () => {
+    setSaving(true);
+    try { await onSave(student.studentId, val, note); onClose(); } finally { setSaving(false); }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+      <div className="bg-slate-900 border border-white/15 rounded-2xl w-full max-w-lg max-h-[88vh] flex flex-col shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between p-5 border-b border-white/10">
+          <div>
+            <h3 className="text-lg font-semibold flex items-center gap-2"><Eye className="w-5 h-5 text-purple-300" /> ตรวจคะแนนคลิป</h3>
+            <div className="text-sm text-slate-400 mt-1">{student.fullName} · <span className="font-mono">{student.studentId}</span></div>
+          </div>
+          <button onClick={onClose} className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="overflow-y-auto p-5 space-y-4">
+          {/* สถานะ */}
+          <div className="bg-slate-800/50 rounded-lg p-3 text-sm flex flex-wrap gap-x-4 gap-y-1">
+            <span>คะแนนสิ้นสุด: <span className={`font-semibold ${info.final == null ? 'text-red-400' : info.status === 'auto' ? 'text-green-400' : 'text-purple-300'}`}>{info.final == null ? 'รอ TA' : `${info.final}/${maxScore}`}</span></span>
+            <span className="text-slate-400">รีวิว {reviewerScores.length} คน</span>
+            {info.status === 'auto' && <span className="text-green-400 text-xs">สอดคล้อง → ใช้ Max อัตโนมัติ</span>}
+            {info.needsTA && <span className="text-amber-300 text-xs">ต้องให้ TA ตรวจ (คะแนนกระจาย/รีวิวไม่ครบ 3)</span>}
+          </div>
+
+          {/* คะแนนผู้รีวิวรายคน */}
+          <div>
+            <div className="text-xs text-slate-500 mb-1 flex items-center justify-between">
+              <span>คะแนนจากผู้รีวิว</span>
+              {clipLink && <a href={clipLink} target="_blank" rel="noopener noreferrer" className="text-cyan-400 hover:text-cyan-300 inline-flex items-center gap-1"><ExternalLink className="w-3.5 h-3.5" /> เปิดคลิปใน Canvas</a>}
+            </div>
+            {reviewerScores.length === 0 ? (
+              <div className="text-sm text-slate-500 italic">ไม่มีผู้รีวิว</div>
+            ) : (
+              <div className="space-y-1">
+                {reviewerScores.map((rs, i) => (
+                  <div key={i} className="flex items-center justify-between text-sm bg-slate-800/40 rounded px-3 py-1.5">
+                    <span className="text-slate-300">{rs.graderName}</span>
+                    <span className="font-mono font-semibold text-cyan-400">{rs.gradeGiven == null ? '-' : rs.gradeGiven}/{maxScore}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* ช่องกรอกคะแนน TA */}
+          {canEdit ? (
+            <div className="space-y-2">
+              <label className="block text-sm text-slate-300">คะแนนของ TA (0–{maxScore}) — ใช้เป็นคะแนนสิ้นสุด</label>
+              <input
+                type="number" min="0" max={maxScore} step="0.5" value={val}
+                onChange={(e) => setVal(e.target.value)}
+                placeholder="ใส่คะแนนหลังดูคลิป"
+                className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white"
+              />
+              <input
+                type="text" value={note} onChange={(e) => setNote(e.target.value)}
+                placeholder="โน้ต (ถ้ามี)"
+                className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm"
+              />
+              {currentTa?.updatedByName && <div className="text-xs text-slate-500">แก้ล่าสุดโดย {currentTa.updatedByName}</div>}
+            </div>
+          ) : (
+            <div className="text-sm text-slate-400">เฉพาะ TA/Admin เท่านั้นที่ใส่คะแนนได้</div>
+          )}
+        </div>
+
+        <div className="p-4 border-t border-white/10 flex justify-end gap-2">
+          {canEdit && val !== '' && (
+            <button onClick={() => { setVal(''); onSave(student.studentId, '', note); onClose(); }} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm">ล้างคะแนน TA</button>
+          )}
+          <button onClick={onClose} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm">ปิด</button>
+          {canEdit && <button onClick={doSave} disabled={saving} className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium disabled:opacity-50">{saving ? 'กำลังบันทึก...' : 'บันทึกคะแนน'}</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// CanvasExportModal - ตั้งชื่อคอลัมน์ assignment แล้วดาวน์โหลด CSV รูปแบบ Canvas Gradebook Import
+function CanvasExportModal({ semesterId, semesterMeta, maxScore, people, onClose }) {
+  const LS_KEY = `canvasExportHeaders_${semesterId}`;
+  const defaultClip = semesterMeta?.canvasAssignmentId
+    ? `${semesterMeta.assignmentName || 'Clip Score'} (${semesterMeta.canvasAssignmentId})`
+    : 'Clip Score';
+  const [headers, setHeaders] = useState(() => {
+    try { const s = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); if (s) return s; } catch { /* ignore */ }
+    return { clip: defaultClip, owner: 'Q&A ท้ายคลิป', peer: 'Peer Review Q&A' };
+  });
+
+  const csvEscape = (v) => {
+    const s = String(v == null ? '' : v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const download = () => {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(headers)); } catch { /* ignore */ }
+    // เลือกเฉพาะคอลัมน์ที่มีชื่อหัว
+    const cols = [];
+    if (headers.clip.trim()) cols.push({ key: 'clip', header: headers.clip.trim(), pp: maxScore });
+    if (headers.owner.trim()) cols.push({ key: 'ownerQa', header: headers.owner.trim(), pp: 2 });
+    if (headers.peer.trim()) cols.push({ key: 'peer', header: headers.peer.trim(), pp: 3 });
+
+    const fixed = ['Student', 'ID', 'SIS User ID', 'SIS Login ID', 'Section'];
+    const headerRow = [...fixed, ...cols.map(c => c.header)];
+    const ppRow = ['Points Possible', '', '', '', '', ...cols.map(c => c.pp)];
+    const dataRows = people.map(p => ([
+      p.name, p.canvasUserId ?? '', p.sisId, '', '',
+      ...cols.map(c => (p[c.key] === '' || p[c.key] == null ? '' : p[c.key])),
+    ]));
+    const all = [headerRow, ppRow, ...dataRows];
+    const csv = all.map(r => r.map(csvEscape).join(',')).join('\n');
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `canvas-import-${new Date().toISOString().split('T')[0]}.csv`;
+    link.click();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={onClose}>
+      <div className="bg-slate-900 border border-white/15 rounded-2xl w-full max-w-lg shadow-2xl" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-start justify-between p-5 border-b border-white/10">
+          <div>
+            <h3 className="text-lg font-semibold flex items-center gap-2"><Download className="w-5 h-5 text-green-400" /> ส่งออกเข้า Canvas</h3>
+            <p className="text-sm text-slate-400 mt-1">ตั้งชื่อคอลัมน์ assignment ให้ตรงกับ Canvas ({people.length} คน)</p>
+          </div>
+          <button onClick={onClose} className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <div>
+            <label className="block text-sm text-purple-300 mb-1">คอลัมน์คะแนนคลิป (เต็ม {maxScore})</label>
+            <input value={headers.clip} onChange={(e) => setHeaders(h => ({ ...h, clip: e.target.value }))} className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm" />
+            <p className="text-xs text-slate-500 mt-1">ใส่ "ชื่อ (id)" = อัปเดต assignment เดิม · ใส่ชื่อเปล่า = สร้างใหม่</p>
+          </div>
+          <div>
+            <label className="block text-sm text-amber-400 mb-1">คอลัมน์ Q&amp;A เจ้าของ (เต็ม 2)</label>
+            <input value={headers.owner} onChange={(e) => setHeaders(h => ({ ...h, owner: e.target.value }))} className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm" />
+          </div>
+          <div>
+            <label className="block text-sm text-amber-400 mb-1">คอลัมน์ Peer Review (เต็ม 3)</label>
+            <input value={headers.peer} onChange={(e) => setHeaders(h => ({ ...h, peer: e.target.value }))} className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm" />
+          </div>
+          <div className="bg-slate-800/50 rounded-lg p-3 text-xs text-slate-400">
+            รูปแบบ: หัวตาราง Canvas (Student, ID, SIS User ID, …) + แถว Points Possible + 1 แถว/คน ·
+            Canvas จับคู่นักศึกษาด้วย ID/SIS User ID · เว้นชื่อคอลัมน์ว่างไว้ถ้าไม่ต้องการส่งคะแนนนั้น
+          </div>
+        </div>
+
+        <div className="p-4 border-t border-white/10 flex justify-end gap-2">
+          <button onClick={onClose} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm">ยกเลิก</button>
+          <button onClick={download} className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium flex items-center gap-2"><Download className="w-4 h-4" /> ดาวน์โหลด CSV</button>
+        </div>
+      </div>
     </div>
   );
 }
