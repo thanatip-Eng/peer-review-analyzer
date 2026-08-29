@@ -1,6 +1,6 @@
 // src/components/DataViewer.jsx
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { doc, getDoc, collection, getDocs } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, getDocs, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { getFlaggedStudents, getFlaggedGraders } from '../utils/csvParser';
@@ -20,7 +20,7 @@ const QA_REASON_LABEL = {
 };
 
 export default function DataViewer({ semesterId, taAssignment }) {
-  const { isAdmin, isTA } = useAuth();
+  const { isAdmin, isTA, currentUser, userData } = useAuth();
   const [data, setData] = useState(null);
   const [groupData, setGroupData] = useState(null);
   const [groupSets, setGroupSets] = useState([]);
@@ -33,6 +33,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
   const [qaThreshold, setQaThreshold] = useState(0.35);   // เกณฑ์ความคล้ายคำถามที่ใช้ตอนประมวลผล
   const [qaByOwner, setQaByOwner] = useState(null);       // sisId -> คะแนนเจ้าของคลิป (ตั้งคำถาม/ตอบเอง)
   const [reviewsByClip, setReviewsByClip] = useState(null); // sisId(เจ้าของ) -> [{reviewerName, transcribedQ}]
+  const [qaOverrides, setQaOverrides] = useState({});     // `${reviewerId}__${clipCode}` -> { score:0|1, ... } TA แก้คะแนนรีวิว
   
   // UI state
   const [activeTab, setActiveTab] = useState('overview');
@@ -194,6 +195,16 @@ export default function DataViewer({ semesterId, taAssignment }) {
           setQaByOwner(null);
           setReviewsByClip(null);
         }
+
+        // TA overrides คะแนนรีวิว Q&A (0/1)
+        try {
+          const ovSnap = await getDocs(collection(db, 'semesters', semesterId, 'qaReviewOverrides'));
+          const ov = {};
+          ovSnap.docs.forEach((d) => { ov[d.id] = d.data(); });
+          setQaOverrides(ov);
+        } catch {
+          setQaOverrides({});
+        }
       } catch (err) {
         console.error('Error fetching data:', err);
         setError(`เกิดข้อผิดพลาด: ${err.message}`);
@@ -228,6 +239,45 @@ export default function DataViewer({ semesterId, taAssignment }) {
     if (!m?.canvasUrl || !m.canvasCourseId || !m.canvasAssignmentId || !canvasUserId) return null;
     return `${m.canvasUrl.replace(/\/+$/, '')}/courses/${m.canvasCourseId}/gradebook/speed_grader?assignment_id=${m.canvasAssignmentId}&student_id=${canvasUserId}`;
   }, [semesterMeta]);
+
+  // ===== Q&A per-review override (TA แก้คะแนน 0/1) =====
+  const qaReviewKey = (reviewerId, clipCode) => `${reviewerId}__${clipCode}`;
+
+  // คะแนน effective ของรีวิว 1 คลิป (override ถ้ามี ไม่งั้นใช้ full?1:0)
+  const reviewEffScore = useCallback((r) => {
+    const ov = qaOverrides[qaReviewKey(r.reviewerId, r.clipCode)];
+    if (ov && (ov.score === 0 || ov.score === 1)) return ov.score;
+    return r.full ? 1 : 0;
+  }, [qaOverrides]);
+
+  // คะแนนรวม Q&A ของ grader (รวม override) cap 3 — null ถ้าไม่มี record
+  const graderQaTotal = useCallback((graderId) => {
+    const qa = qaByGrader?.[graderId];
+    if (!qa) return null;
+    const sum = (qa.reviews || []).reduce((acc, r) => acc + reviewEffScore(r), 0);
+    return Math.min(sum, 3);
+  }, [qaByGrader, reviewEffScore]);
+
+  // แผนที่ sisId(เจ้าของ) -> canvasUserId (ไว้ทำลิงก์เปิดคลิปเจ้าของใน modal)
+  const studentIdToCanvasId = useMemo(() => {
+    const m = {};
+    if (data?.students) Object.values(data.students).forEach(s => { if (s.studentId) m[s.studentId] = s.canvasUserId; });
+    return m;
+  }, [data]);
+
+  // บันทึก override คะแนนรีวิว (TA/Admin)
+  const saveQaOverride = useCallback(async (reviewerId, clipCode, score) => {
+    if (!semesterId || !reviewerId || !clipCode) return;
+    const key = qaReviewKey(reviewerId, clipCode);
+    const payload = {
+      reviewerId, clipCode, score,
+      updatedBy: currentUser?.uid || '',
+      updatedByName: userData?.displayName || currentUser?.email || '',
+      updatedAt: serverTimestamp(),
+    };
+    await setDoc(doc(db, 'semesters', semesterId, 'qaReviewOverrides', key), payload, { merge: true });
+    setQaOverrides(prev => ({ ...prev, [key]: { ...prev[key], ...payload } }));
+  }, [semesterId, currentUser, userData]);
 
   // จำนวนงานที่ TA ส่งต่อ Admin (ยังไม่ปิด) — ไว้โชว์ badge
   const escalatedCount = useMemo(
@@ -358,24 +408,24 @@ export default function DataViewer({ semesterId, taAssignment }) {
         matchHasFlag = g.flags.length === 0;
       }
 
-      // คะแนนรวม Q&A filter
+      // คะแนนรวม Q&A filter (รวม override ของ TA)
       let matchQaTotal = true;
       if (graderFilters.qaTotal !== 'all' && qaByGrader) {
         const agg = qaByGrader[g.graderId]?.agg;
         if (graderFilters.qaTotal === 'noMatch') {
           matchQaTotal = !!agg?.flags?.includes('qa_no_match');
         } else {
-          matchQaTotal = (agg ? agg.qaScore : 0) === Number(graderFilters.qaTotal);
+          matchQaTotal = (graderQaTotal(g.graderId) ?? 0) === Number(graderFilters.qaTotal);
         }
       }
 
       return matchSearch && matchGroup && matchCompletion && matchReviewStatus && matchHasFlag && matchQaTotal;
     }).sort((a, b) => {
       // เรียงตามคะแนนรวม = Q&A (ถ้ามี) มิฉะนั้น fallback คะแนนรีวิวเดิม
-      const qs = (g) => qaByGrader ? (qaByGrader[g.graderId]?.agg.qaScore ?? -1) : g.peerReviewScore.netScore;
+      const qs = (g) => qaByGrader ? (graderQaTotal(g.graderId) ?? -1) : g.peerReviewScore.netScore;
       return qs(b) - qs(a);
     });
-  }, [data, searchQuery, groupFilter, getStudentGroup, isTA, taAssignment, allowedGroups, graderFilters, reviewStatuses, qaByGrader]);
+  }, [data, searchQuery, groupFilter, getStudentGroup, isTA, taAssignment, allowedGroups, graderFilters, reviewStatuses, qaByGrader, graderQaTotal]);
 
   const flaggedStudents = useMemo(() => data ? getFlaggedStudents(data.students) : [], [data]);
   const flaggedGraders = useMemo(() => data ? getFlaggedGraders(data.graders) : [], [data]);
@@ -414,8 +464,8 @@ export default function DataViewer({ semesterId, taAssignment }) {
       const group = getStudentGroup(g.graderId);
       if (group && stats[group]) {
         stats[group].graders.push(g);
-        // คะแนน PR = Q&A (ถ้ามี) มิฉะนั้น fallback คะแนนรีวิวเดิม
-        const prScore = qaByGrader ? (qaByGrader[g.graderId]?.agg.qaScore ?? 0) : g.peerReviewScore.netScore;
+        // คะแนน PR = Q&A (รวม override, ถ้ามี) มิฉะนั้น fallback คะแนนรีวิวเดิม
+        const prScore = qaByGrader ? (graderQaTotal(g.graderId) ?? 0) : g.peerReviewScore.netScore;
         stats[group].prScores.push(prScore);
         if (g.flags.length > 0) {
           stats[group].flaggedCount++;
@@ -434,7 +484,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
     });
     
     return stats;
-  }, [data, selectedGroupSet, groupData, allGroups, getStudentGroup, isTA, taAssignment, allowedGroups, qaByGrader]);
+  }, [data, selectedGroupSet, groupData, allGroups, getStudentGroup, isTA, taAssignment, allowedGroups, qaByGrader, graderQaTotal]);
 
   // Export functions
   const downloadCSV = (rows, filename) => {
@@ -513,11 +563,12 @@ export default function DataViewer({ semesterId, taAssignment }) {
         'งานสมบูรณ์ (ให้คะแนนแล้ว)': g.peerReviewScore.reviewedCount,
         'คะแนนพื้นฐาน (รีวิว)': g.peerReviewScore.baseScore,
         ...(() => {
-          // คะแนนรวม = คุณภาพ Q&A (1/คลิป, เต็ม 3)
+          // คะแนนรวม = คุณภาพ Q&A (1/คลิป, เต็ม 3, รวม override ของ TA)
           if (!qaByGrader) return { 'คะแนนรวม (Q&A)': 'รอข้อมูล Q&A', 'คะแนนเต็ม': 3 };
           const a = qaByGrader[g.graderId]?.agg;
+          const total = graderQaTotal(g.graderId);
           return {
-            'คะแนนรวม (Q&A)': a ? a.qaScore : 0,
+            'คะแนนรวม (Q&A)': total == null ? 0 : total,
             'คะแนนเต็ม': 3,
             'Q&A ดูจริง': a ? a.watched : '-',
             'Q&A ตอบเป็นเนื้อ': a ? a.answered : '-',
@@ -531,7 +582,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
       };
     });
     downloadCSV(rows, 'grader-peer-review-scores');
-  }, [data, filteredGraders, selectedGroupSet, getStudentGroup, reviewStatuses, qaByGrader]);
+  }, [data, filteredGraders, selectedGroupSet, getStudentGroup, reviewStatuses, qaByGrader, graderQaTotal]);
 
   if (loading) {
     return (
@@ -1079,6 +1130,17 @@ export default function DataViewer({ semesterId, taAssignment }) {
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
                             <span>{grader.fullName}</span>
+                            {getCanvasLink(grader.canvasUserId) && (
+                              <a
+                                href={getCanvasLink(grader.canvasUserId)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                title="เปิดงาน/คลิปของผู้รีวิวคนนี้ใน Canvas (SpeedGrader)"
+                                className="text-cyan-400 hover:text-cyan-300"
+                              >
+                                <ExternalLink className="w-4 h-4" />
+                              </a>
+                            )}
                             {grader.flags.length > 0 && (
                               <FlagTooltip flags={grader.flags} />
                             )}
@@ -1109,7 +1171,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                         </td>
                         <td className="px-4 py-3 text-center text-cyan-400">{pr.baseScore}</td>
                         {(() => {
-                          // คะแนนรวม = คุณภาพ Q&A (1/คลิป). ทั้งเทอมยังไม่มี Q&A -> รอข้อมูล
+                          // คะแนนรวม = คุณภาพ Q&A (1/คลิป, รวม override ของ TA). ทั้งเทอมยังไม่มี Q&A -> รอข้อมูล
                           if (!qaByGrader) {
                             return <td className="px-4 py-3 text-center text-slate-500 text-xs">— รอข้อมูล Q&amp;A</td>;
                           }
@@ -1119,15 +1181,18 @@ export default function DataViewer({ semesterId, taAssignment }) {
                             return <td className="px-4 py-3 text-center"><span className="font-semibold text-red-400">0/3</span></td>;
                           }
                           const a = qa.agg;
-                          const color = a.qaScore >= 3 ? 'text-green-400' : a.qaScore > 0 ? 'text-amber-400' : 'text-red-400';
-                          const title = `รีวิว ${a.submitted} คลิป · ดูจริง(คำถามตรง) ${a.watched} · ตอบเป็นเนื้อ ${a.answered} · ผ่านครบ ${a.full} — คลิกดูรายคลิป`;
+                          const total = graderQaTotal(grader.graderId);
+                          const color = total >= 3 ? 'text-green-400' : total > 0 ? 'text-amber-400' : 'text-red-400';
+                          const edited = (qa.reviews || []).some(r => qaOverrides[`${r.reviewerId}__${r.clipCode}`]);
+                          const title = `รีวิว ${a.submitted} คลิป · ดูจริง(คำถามตรง) ${a.watched} · ตอบเป็นเนื้อ ${a.answered} · ผ่านครบ ${a.full}${edited ? ' · TA แก้แล้ว' : ''} — คลิกดู/แก้รายคลิป`;
                           return (
                             <td className="px-4 py-3 text-center" title={title}>
                               <button
-                                onClick={() => setQaDetail({ graderName: grader.fullName, agg: a, reviews: qa.reviews || [] })}
+                                onClick={() => setQaDetail({ graderName: grader.fullName, graderId: grader.graderId, agg: a, reviews: qa.reviews || [] })}
                                 className="inline-flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-white/10 transition"
                               >
-                                <span className={`font-semibold ${color}`}>{a.qaScore}/3</span>
+                                <span className={`font-semibold ${color}`}>{total}/3</span>
+                                {edited && <span title="TA ปรับคะแนนแล้ว">✏️</span>}
                                 {a.flags && a.flags.includes('qa_no_match') && (
                                   <span title="ตอบแต่คำถามไม่ตรง — อาจไม่ได้ดู">⚠️</span>
                                 )}
@@ -1314,6 +1379,11 @@ export default function DataViewer({ semesterId, taAssignment }) {
         <QADetailModal
           detail={qaDetail}
           threshold={qaThreshold}
+          canEdit={isAdmin || isTA}
+          qaOverrides={qaOverrides}
+          reviewEffScore={reviewEffScore}
+          onOverride={saveQaOverride}
+          getClipLink={(clipCode) => getCanvasLink(studentIdToCanvasId[clipCode])}
           onClose={() => setQaDetail(null)}
         />
       )}
@@ -1347,9 +1417,11 @@ function StatCard({ label, value, icon: Icon, color }) {
   );
 }
 
-// QADetailModal - หน้าต่างดูรายคลิป Q&A ให้ TA ตรวจคู่ที่ก้ำกึ่งด้วยตา
-function QADetailModal({ detail, threshold, onClose }) {
+// QADetailModal - หน้าต่างดูรายคลิป Q&A ให้ TA ตรวจคู่ที่ก้ำกึ่งด้วยตา + แก้คะแนน 0/1
+function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEffScore, onOverride, getClipLink, onClose }) {
   const { graderName, agg, reviews } = detail;
+  const effScore = (r) => (reviewEffScore ? reviewEffScore(r) : (r.full ? 1 : 0));
+  const liveTotal = Math.min((reviews || []).reduce((acc, r) => acc + effScore(r), 0), 3);
   // ก้ำกึ่ง = matchScore อยู่ในแถบ ±0.1 รอบเกณฑ์ (ควรให้คนตรวจดูเอง)
   const BORDER_BAND = 0.1;
   const isBorderline = (m) => m != null && Math.abs(m - threshold) <= BORDER_BAND;
@@ -1395,9 +1467,9 @@ function QADetailModal({ detail, threshold, onClose }) {
             </h3>
             <div className="mt-2 flex flex-wrap items-center gap-3 text-sm">
               <span>
-                คะแนน:{' '}
-                <span className={`font-semibold ${agg.qaScore >= 3 ? 'text-green-400' : agg.qaScore > 0 ? 'text-amber-400' : 'text-red-400'}`}>
-                  {agg.qaScore}/3
+                คะแนนรวม:{' '}
+                <span className={`font-semibold ${liveTotal >= 3 ? 'text-green-400' : liveTotal > 0 ? 'text-amber-400' : 'text-red-400'}`}>
+                  {liveTotal}/3
                 </span>
               </span>
               <span className="text-slate-400">ส่งรีวิว {agg.submitted}</span>
@@ -1418,6 +1490,7 @@ function QADetailModal({ detail, threshold, onClose }) {
           <span><span className="text-amber-400">■</span> ก้ำกึ่ง (ควรตรวจด้วยตา)</span>
           <span><span className="text-red-400">■</span> คำถามไม่ตรง</span>
           <span className="text-slate-500">เรียงตัวก้ำกึ่ง/น่าสงสัยขึ้นก่อน</span>
+          {canEdit && <span className="text-purple-300">TA ปรับคะแนนรีวิวได้ (0/1) — เปิดคลิปเทียบก่อนตัดสิน</span>}
         </div>
 
         {/* Body */}
@@ -1428,6 +1501,10 @@ function QADetailModal({ detail, threshold, onClose }) {
           {sorted.map((r, i) => {
             const border = isBorderline(r.matchScore);
             const pct = r.matchScore == null ? 0 : Math.round(r.matchScore * 100);
+            const eff = effScore(r);
+            const ovKey = `${r.reviewerId}__${r.clipCode}`;
+            const isOverridden = !!qaOverrides[ovKey];
+            const clipLink = getClipLink ? getClipLink(r.clipCode) : null;
             return (
               <div
                 key={i}
@@ -1440,6 +1517,11 @@ function QADetailModal({ detail, threshold, onClose }) {
                   <div className="flex items-center gap-2 text-sm">
                     <Play className="w-4 h-4 text-cyan-400" />
                     <span className="font-mono text-slate-300">คลิป {r.clipCode || '-'}</span>
+                    {clipLink && (
+                      <a href={clipLink} target="_blank" rel="noopener noreferrer" title="เปิดคลิป/งานของเจ้าของใน Canvas (SpeedGrader)" className="text-cyan-400 hover:text-cyan-300">
+                        <ExternalLink className="w-3.5 h-3.5 inline" />
+                      </a>
+                    )}
                     {r.ownerName && <span className="text-slate-400">· เจ้าของ: {r.ownerName}</span>}
                     {border && (
                       <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30">
@@ -1456,6 +1538,39 @@ function QADetailModal({ detail, threshold, onClose }) {
                       : <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-400">✗ ไม่ได้ตอบ</span>}
                     {r.full && <span className="text-xs px-2 py-0.5 rounded bg-cyan-900/40 text-cyan-300">ผ่านครบ</span>}
                   </div>
+                </div>
+
+                {/* per-review score + TA edit 0/1 */}
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2 bg-slate-900/50 rounded-lg px-3 py-2">
+                  <div className="text-sm flex items-center gap-2">
+                    <span className="text-slate-400">คะแนนรีวิวนี้:</span>
+                    <span className={`font-bold ${eff >= 1 ? 'text-green-400' : 'text-red-400'}`}>{eff}/1</span>
+                    {isOverridden && (
+                      <span className="text-xs text-purple-300" title={`แก้โดย ${qaOverrides[ovKey]?.updatedByName || 'TA'}`}>
+                        ✏️ TA ปรับ (อัตโนมัติ {r.full ? 1 : 0})
+                      </span>
+                    )}
+                    {!r.watched && r.answered && (
+                      <span className="text-xs px-2 py-0.5 rounded bg-amber-900/40 text-amber-300">⚠️ ตอบแต่คำถามไม่ตรง — ควรเช็คคลิป</span>
+                    )}
+                  </div>
+                  {canEdit && (
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs text-slate-500 mr-1">TA ตั้งคะแนน:</span>
+                      {[0, 1].map((v) => (
+                        <button
+                          key={v}
+                          onClick={() => onOverride && onOverride(r.reviewerId, r.clipCode, v)}
+                          disabled={!r.reviewerId || !r.clipCode}
+                          className={`px-3 py-1 rounded-lg text-sm font-semibold transition disabled:opacity-40 ${
+                            eff === v ? (v === 1 ? 'bg-green-600 text-white' : 'bg-red-600 text-white') : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                          }`}
+                        >
+                          {v}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* match score bar */}
@@ -1487,7 +1602,12 @@ function QADetailModal({ detail, threshold, onClose }) {
 
                 {/* answer */}
                 <div className="mt-3 bg-slate-900/60 rounded-lg p-3">
-                  <div className="text-xs text-slate-500 mb-1">คำตอบของผู้รีวิว</div>
+                  <div className="text-xs text-slate-500 mb-1 flex items-center justify-between">
+                    <span>คำตอบของผู้รีวิว</span>
+                    {r.rowNumber != null && (
+                      <span className="text-slate-500">MS Form (ไฟล์ผู้รีวิว) แถวที่ {r.rowNumber}</span>
+                    )}
+                  </div>
                   <div className="text-sm text-slate-200 whitespace-pre-wrap break-words">
                     {r.myAnswer || <span className="text-slate-500 italic">— ว่าง —</span>}
                   </div>
@@ -1549,7 +1669,10 @@ function OwnerQATooltip({ qa, reviews }) {
 
           {/* คำถามท้ายคลิป */}
           <div>
-            <div className="text-xs text-slate-500 mb-0.5">คำถามท้ายคลิป (เจ้าของระบุ)</div>
+            <div className="text-xs text-slate-500 mb-0.5 flex items-center justify-between">
+              <span>คำถามท้ายคลิป (เจ้าของระบุ)</span>
+              {qa?.rowNumber != null && <span className="text-slate-500">MS Form (ไฟล์เจ้าของ) แถวที่ {qa.rowNumber}</span>}
+            </div>
             <div className="text-xs text-slate-200 whitespace-pre-wrap break-words">
               {qa?.question || <span className="text-slate-500 italic">— ไม่ได้ตั้งคำถาม / ไม่ส่งฟอร์ม —</span>}
             </div>

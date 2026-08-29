@@ -71,7 +71,8 @@ function digitsOnly(s) {
 export function rowsFromArrayBuffer(arrayBuffer) {
   const wb = XLSX.read(arrayBuffer, { type: 'array' });
   const ws = wb.Sheets[wb.SheetNames[0]];
-  return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: false });
+  // blankrows:true เพื่อให้ index ของแถวตรงกับเลขแถวจริงใน Excel (ไว้อ้างอิงให้ TA ตรวจย้อนกลับ)
+  return XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', blankrows: true });
 }
 
 function headerIndex(headerRow, keywords) {
@@ -101,6 +102,7 @@ export function parseOwnerRows(rows) {
       name,
       question: String((iQ >= 0 ? row[iQ] : '') || '').trim(),
       ownAnswer: String((iA >= 0 ? row[iA] : '') || '').trim(),
+      rowNumber: r + 1, // เลขแถวจริงใน Excel (header = แถว 1)
     });
   }
   return out;
@@ -134,6 +136,7 @@ export function parseReviewerRows(rows) {
       myAnswer: String((iA >= 0 ? row[iA] : '') || '').trim(),
       publish: String((iPub >= 0 ? row[iPub] : '') || '').trim(),
       publishReason: String((iReason >= 0 ? row[iReason] : '') || '').trim(),
+      rowNumber: r + 1, // เลขแถวจริงใน Excel (header = แถว 1)
     });
   }
   return out;
@@ -198,6 +201,7 @@ export function computeQA({ ownerData, reviewerData, students, graders, threshol
       posed,
       answered,
       score: (posed ? 1 : 0) + (answered ? 1 : 0),
+      rowNumber: o.rowNumber ?? null, // แถวใน MS Form ไฟล์เจ้าของ
     };
   });
 
@@ -258,6 +262,7 @@ export function computeQA({ ownerData, reviewerData, students, graders, threshol
       full,
       publish: rv.publish,
       reason, // '' ถ้าเจอคำถาม, else bad_clipcode|linked_no_question|owner_not_submitted
+      rowNumber: rv.rowNumber ?? null, // แถวใน MS Form ไฟล์ผู้รีวิว
     });
 
     if (!reviewers[reviewerKey]) {

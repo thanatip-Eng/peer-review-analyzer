@@ -152,6 +152,24 @@ service cloud.firestore {
         allow read: if isLoggedIn() && (isAdmin() || isTA());
         allow write: if isAdmin();
       }
+
+      // Sub-collection: peerQAData (คะแนน Q&A จาก MS Form)
+      match /peerQAData/{docId} {
+        allow read: if isLoggedIn() && (isAdmin() || isTA());
+        allow write: if isAdmin();
+      }
+
+      // Sub-collection: reviewStatuses (สถานะ/โน้ตการตรวจของ TA)
+      match /reviewStatuses/{docId} {
+        allow read: if isLoggedIn() && (isAdmin() || isTA());
+        allow write: if isAdmin() || isTA();
+      }
+
+      // Sub-collection: qaReviewOverrides (TA แก้คะแนนรีวิว Q&A 0/1)
+      match /qaReviewOverrides/{docId} {
+        allow read: if isLoggedIn() && (isAdmin() || isTA());
+        allow write: if isAdmin() || isTA();
+      }
     }
     
     // Collection: taAssignments
