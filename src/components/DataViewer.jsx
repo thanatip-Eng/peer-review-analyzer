@@ -254,6 +254,13 @@ export default function DataViewer({ semesterId, taAssignment }) {
     return `${m.canvasUrl.replace(/\/+$/, '')}/courses/${m.canvasCourseId}/gradebook/speed_grader?assignment_id=${m.canvasAssignmentId}&student_id=${canvasUserId}`;
   }, [semesterMeta]);
 
+  // ลิงก์หน้า Peer Review ของ assignment ใน Canvas (ไว้เช็คว่ารีวิวครบไหม)
+  const getCanvasPeerReviewLink = useCallback(() => {
+    const m = semesterMeta;
+    if (!m?.canvasUrl || !m.canvasCourseId || !m.canvasAssignmentId) return null;
+    return `${m.canvasUrl.replace(/\/+$/, '')}/courses/${m.canvasCourseId}/assignments/${m.canvasAssignmentId}/peer_reviews`;
+  }, [semesterMeta]);
+
   // ===== Q&A per-review override (TA แก้คะแนน 0/1) =====
   const qaReviewKey = (reviewerId, clipCode) => `${reviewerId}__${clipCode}`;
 
@@ -1562,6 +1569,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
           reviewEffScore={reviewEffScore}
           onOverride={saveQaOverride}
           getClipLink={(clipCode) => getCanvasLink(studentIdToCanvasId[clipCode])}
+          peerReviewLink={getCanvasPeerReviewLink()}
           onClose={() => setQaDetail(null)}
         />
       )}
@@ -1622,7 +1630,7 @@ function StatCard({ label, value, icon: Icon, color }) {
 }
 
 // QADetailModal - หน้าต่างดูรายคลิป Q&A ให้ TA ตรวจคู่ที่ก้ำกึ่งด้วยตา + แก้คะแนน 0/1
-function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEffScore, onOverride, getClipLink, onClose }) {
+function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEffScore, onOverride, getClipLink, peerReviewLink, onClose }) {
   const { graderName, agg, reviews } = detail;
   const effScore = (r) => (reviewEffScore ? reviewEffScore(r) : (r.full ? 1 : 0));
   const liveTotal = Math.min((reviews || []).reduce((acc, r) => acc + effScore(r), 0), 3);
@@ -1682,6 +1690,11 @@ function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEff
               <span className="text-slate-400">ผ่านครบ {agg.full}</span>
               <span className="text-slate-500 text-xs">เกณฑ์คำถามตรง ≥ {threshold}</span>
             </div>
+            {peerReviewLink && (
+              <a href={peerReviewLink} target="_blank" rel="noopener noreferrer" className="mt-2 inline-flex items-center gap-1 text-sm text-cyan-400 hover:text-cyan-300">
+                <ExternalLink className="w-4 h-4" /> เปิดหน้า Peer Review ของ assignment ใน Canvas (เช็ครีวิวครบไหม)
+              </a>
+            )}
           </div>
           <button onClick={onClose} className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white">
             <X className="w-5 h-5" />
@@ -1804,24 +1817,38 @@ function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEff
                   </div>
                 </div>
 
-                {/* answer */}
-                <div className="mt-3 bg-slate-900/60 rounded-lg p-3">
-                  <div className="text-xs text-slate-500 mb-1 flex items-center justify-between">
-                    <span>คำตอบของผู้รีวิว</span>
+                {/* สำเนาคำตอบดิบจาก MS Form (ไฟล์ที่อัปโหลด) — ให้ TA ยืนยัน; ต้นทางจริง = xlsx แถว N */}
+                <div className="mt-3 bg-slate-950/60 border border-white/10 rounded-lg p-3">
+                  <div className="text-xs mb-2 flex items-center justify-between flex-wrap gap-1">
+                    <span className="text-slate-400 font-medium">สำเนาคำตอบจาก MS Form (ไฟล์ผู้รีวิว)</span>
                     {r.rowNumber != null && (
-                      <span className="text-slate-500">MS Form (ไฟล์ผู้รีวิว) แถวที่ {r.rowNumber}</span>
+                      <span className="text-amber-300">📄 เปิด xlsx ที่ดาวน์โหลด → แถวที่ {r.rowNumber} เพื่อยืนยันต้นทาง</span>
                     )}
                   </div>
-                  <div className="text-sm text-slate-200 whitespace-pre-wrap break-words">
-                    {r.myAnswer || <span className="text-slate-500 italic">— ว่าง —</span>}
+                  <div className="space-y-1.5 text-xs">
+                    {(() => {
+                      const blank = <span className="text-red-300 italic">— เว้นว่าง —</span>;
+                      const Field = ({ label, value, mono }) => (
+                        <div className="grid grid-cols-[7rem_1fr] gap-2">
+                          <span className="text-slate-500">{label}</span>
+                          <span className={`text-slate-200 whitespace-pre-wrap break-words ${mono ? 'font-mono' : ''}`}>{value ? value : blank}</span>
+                        </div>
+                      );
+                      return (
+                        <>
+                          <Field label="อีเมลผู้รีวิว" value={r.reviewerEmail} mono />
+                          <Field label="ลำดับคลิป" value={r.order} />
+                          <Field label="รหัสคลิป" value={r.clipCode} mono />
+                          <Field label="คำถามที่ถอด" value={r.transcribedQ} />
+                          <Field label="คำตอบ" value={r.myAnswer} />
+                          <Field label="ควรเผยแพร่" value={r.publish} />
+                          <Field label="เหตุผล" value={r.publishReason} />
+                        </>
+                      );
+                    })()}
                   </div>
+                  <div className="text-[11px] text-slate-500 mt-2">* นี่คือสำเนาที่ระบบอ่านจากไฟล์ — หากสงสัยว่าอ่านตกหล่น เปิด xlsx ต้นฉบับที่แถวด้านบนเทียบได้</div>
                 </div>
-
-                {r.publish && (
-                  <div className="mt-2 text-xs text-slate-400">
-                    ควรเผยแพร่: <span className="text-slate-300">{r.publish}</span>
-                  </div>
-                )}
               </div>
             );
           })}

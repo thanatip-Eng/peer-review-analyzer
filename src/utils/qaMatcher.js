@@ -263,6 +263,9 @@ export function computeQA({ ownerData, reviewerData, students, graders, threshol
       publish: rv.publish,
       reason, // '' ถ้าเจอคำถาม, else bad_clipcode|linked_no_question|owner_not_submitted
       rowNumber: rv.rowNumber ?? null, // แถวใน MS Form ไฟล์ผู้รีวิว
+      reviewerEmail: rv.reviewerEmail || '', // ไว้ให้ TA ยืนยันกับต้นทาง
+      order: rv.order || '',
+      publishReason: rv.publishReason || '',
     });
 
     if (!reviewers[reviewerKey]) {
