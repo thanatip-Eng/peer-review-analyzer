@@ -698,7 +698,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
             'คะแนนรวม (Q&A)': total == null ? 0 : total,
             'คะแนนเต็ม': 3,
             'Q&A ดูจริง': a ? a.watched : '-',
-            'Q&A ตอบเป็นเนื้อ': a ? a.answered : '-',
+            'Q&A ตั้งใจตอบ': a ? a.answered : '-',
             'Q&A รีวิวที่ส่ง': a ? a.submitted : '-',
           };
         })(),
@@ -1274,7 +1274,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
 
           <div className="bg-slate-800/50 rounded-xl p-3 text-sm flex flex-wrap gap-4">
             <span className="text-slate-400">เงื่อนไขคะแนนรวม (Q&amp;A):</span>
-            <span><span className="text-green-400">1 คะแนน/คลิป</span> เมื่อถอดคำถามตรง + ตอบเป็นเนื้อ (เต็ม 3)</span>
+            <span><span className="text-green-400">1 คะแนน/คลิป</span> เมื่อถอดคำถามตรง + ตั้งใจตอบ (เต็ม 3)</span>
             <span className="text-slate-500">คลิกที่คะแนนรวมเพื่อดูรายคลิป</span>
           </div>
 
@@ -1371,7 +1371,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                           const total = graderQaTotal(grader.graderId);
                           const color = total >= 3 ? 'text-green-400' : total > 0 ? 'text-amber-400' : 'text-red-400';
                           const edited = (qa.reviews || []).some(r => qaOverrides[`${r.reviewerId}__${r.clipCode}`]);
-                          const title = `รีวิว ${a.submitted} คลิป · ดูจริง(คำถามตรง) ${a.watched} · ตอบเป็นเนื้อ ${a.answered} · ผ่านครบ ${a.full}${edited ? ' · TA แก้แล้ว' : ''} — คลิกดู/แก้รายคลิป`;
+                          const title = `รีวิว ${a.submitted} คลิป · ดูจริง(คำถามตรง) ${a.watched} · ตั้งใจตอบ ${a.answered} · ผ่านครบ ${a.full}${edited ? ' · TA แก้แล้ว' : ''} — คลิกดู/แก้รายคลิป`;
                           return (
                             <td className="px-4 py-3 text-center" title={title}>
                               <button
@@ -1689,7 +1689,7 @@ function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEff
               </span>
               <span className="text-slate-400">ส่งรีวิว {agg.submitted}</span>
               <span className="text-slate-400">ดูจริง(คำถามตรง) {agg.watched}</span>
-              <span className="text-slate-400">ตอบเป็นเนื้อ {agg.answered}</span>
+              <span className="text-slate-400">ตั้งใจตอบ {agg.answered}</span>
               <span className="text-slate-400">ผ่านครบ {agg.full}</span>
               <span className="text-slate-500 text-xs">เกณฑ์คำถามตรง ≥ {threshold}</span>
             </div>
@@ -1754,7 +1754,7 @@ function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEff
                       ? <span className="text-xs px-2 py-0.5 rounded bg-green-900/40 text-green-300">✓ คำถามตรง</span>
                       : <span className="text-xs px-2 py-0.5 rounded bg-red-900/40 text-red-300">✗ คำถามไม่ตรง</span>}
                     {r.answered
-                      ? <span className="text-xs px-2 py-0.5 rounded bg-green-900/40 text-green-300">✓ ตอบเป็นเนื้อ</span>
+                      ? <span className="text-xs px-2 py-0.5 rounded bg-green-900/40 text-green-300">✓ ตั้งใจตอบ</span>
                       : <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-400">✗ ไม่ได้ตอบ</span>}
                     {r.full && <span className="text-xs px-2 py-0.5 rounded bg-cyan-900/40 text-cyan-300">ผ่านครบ</span>}
                   </div>
