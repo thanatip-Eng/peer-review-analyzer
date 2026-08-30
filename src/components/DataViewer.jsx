@@ -351,7 +351,22 @@ export default function DataViewer({ semesterId, taAssignment }) {
     return m;
   }, [data]);
 
+  // จำนวนงานที่ TA ส่งต่อ Admin (ยังไม่ปิด) — ไว้โชว์ badge
+  const escalatedCount = useMemo(
+    () => Object.values(reviewStatuses).filter(s => s?.status === 'escalated').length,
+    [reviewStatuses]
+  );
+
+  // Allowed groups for TA
+  const allowedGroups = useMemo(() => {
+    if (isAdmin) return allGroups;
+    if (!taAssignment) return [];
+    if (taAssignment.canViewAll) return allGroups;
+    return taAssignment.assignedGroups || [];
+  }, [isAdmin, taAssignment, allGroups]);
+
   // รวมคนสำหรับ export Canvas (union students∪graders by sisId) + คะแนน 3 อย่าง (เคารพขอบเขต TA)
+  // ต้องอยู่หลัง allowedGroups (อ้างถึง) เพื่อเลี่ยง temporal-dead-zone
   const exportPeople = useMemo(() => {
     if (!data) return [];
     const map = {};
@@ -381,20 +396,6 @@ export default function DataViewer({ semesterId, taAssignment }) {
       })
       .sort((a, b) => a.sisId.localeCompare(b.sisId));
   }, [data, studentsById, clipFinal, qaByOwner, graderQaTotal, isAdmin, isTA, taAssignment, allowedGroups, getStudentGroup]);
-
-  // จำนวนงานที่ TA ส่งต่อ Admin (ยังไม่ปิด) — ไว้โชว์ badge
-  const escalatedCount = useMemo(
-    () => Object.values(reviewStatuses).filter(s => s?.status === 'escalated').length,
-    [reviewStatuses]
-  );
-
-  // Allowed groups for TA
-  const allowedGroups = useMemo(() => {
-    if (isAdmin) return allGroups;
-    if (!taAssignment) return [];
-    if (taAssignment.canViewAll) return allGroups;
-    return taAssignment.assignedGroups || [];
-  }, [isAdmin, taAssignment, allGroups]);
 
   // Filter students by search and group
   const filteredStudents = useMemo(() => {
