@@ -75,6 +75,8 @@ export default function AdminPanel({ onViewData }) {
   const [qaReviewerFiles, setQaReviewerFiles] = useState([]);  // ไฟล์ผู้รีวิว (เลือกได้หลายไฟล์ ถ้าถูกแบ่ง)
   const [qaProcessing, setQaProcessing] = useState('');     // '' | 'process' | 'save'
   const [qaPreview, setQaPreview] = useState(null);         // ผลจาก computeQA ก่อนบันทึก
+  const [qaSheetUrls, setQaSheetUrls] = useState({ owner: '', reviewer: '' }); // ลิงก์ Excel Online ต้นทาง
+  const [qaSheetSaving, setQaSheetSaving] = useState(false);
 
   // Confirm modal state
   const [confirmModal, setConfirmModal] = useState({
@@ -172,6 +174,35 @@ export default function AdminPanel({ onViewData }) {
   useEffect(() => {
     fetchPendingUsers();
   }, [fetchPendingUsers]);
+
+  // โหลดลิงก์ Excel Online ของรายการที่เลือก (ไว้ prefill)
+  useEffect(() => {
+    if (!selectedSemester) { setQaSheetUrls({ owner: '', reviewer: '' }); return; }
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, 'semesters', selectedSemester));
+        const d = snap.exists() ? snap.data() : {};
+        setQaSheetUrls({ owner: d.qaOwnerSheetUrl || '', reviewer: d.qaReviewerSheetUrl || '' });
+      } catch { setQaSheetUrls({ owner: '', reviewer: '' }); }
+    })();
+  }, [selectedSemester]);
+
+  // บันทึกลิงก์ Excel Online ลง semester doc
+  const handleSaveSheetUrls = async () => {
+    if (!selectedSemester) return;
+    setQaSheetSaving(true);
+    try {
+      await setDoc(doc(db, 'semesters', selectedSemester), {
+        qaOwnerSheetUrl: qaSheetUrls.owner.trim(),
+        qaReviewerSheetUrl: qaSheetUrls.reviewer.trim(),
+      }, { merge: true });
+      setUploadSuccess('บันทึกลิงก์ Excel Online แล้ว');
+    } catch (err) {
+      setUploadError(`บันทึกลิงก์ไม่สำเร็จ: ${err.message}`);
+    } finally {
+      setQaSheetSaving(false);
+    }
+  };
 
   // Create new semester
   const handleCreateSemester = async () => {
@@ -1297,6 +1328,28 @@ export default function AdminPanel({ onViewData }) {
                       </button>
                     </div>
                   )}
+
+                  {/* ลิงก์ Excel Online (ต้นทางจริง) ให้ TA เปิดตรวจ */}
+                  <div className="mt-5 pt-4 border-t border-white/10">
+                    <p className="text-sm font-medium mb-1">ลิงก์ Excel Online (ต้นทางจริง สำหรับ TA เปิดตรวจ)</p>
+                    <p className="text-xs text-slate-500 mb-3">วางลิงก์ชีต Excel Online (SharePoint/OneDrive) — TA จะกดเปิดแล้วค้นด้วยอีเมลได้ · แนะนำตั้งการแชร์ให้เปิดได้ทั้งองค์กร</p>
+                    <div className="space-y-2">
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1">ไฟล์เจ้าของคลิป</label>
+                        <input type="url" value={qaSheetUrls.owner} onChange={(e) => setQaSheetUrls(s => ({ ...s, owner: e.target.value }))}
+                          placeholder="https://...sharepoint.com/..." className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm" />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-slate-400 mb-1">ไฟล์ผู้รีวิว</label>
+                        <input type="url" value={qaSheetUrls.reviewer} onChange={(e) => setQaSheetUrls(s => ({ ...s, reviewer: e.target.value }))}
+                          placeholder="https://...sharepoint.com/..." className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm" />
+                      </div>
+                      <button onClick={handleSaveSheetUrls} disabled={qaSheetSaving}
+                        className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
+                        <Save className="w-4 h-4" /> {qaSheetSaving ? 'กำลังบันทึก...' : 'บันทึกลิงก์'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
               )}
 

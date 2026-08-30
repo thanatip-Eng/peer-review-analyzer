@@ -1117,6 +1117,8 @@ export default function DataViewer({ semesterId, taAssignment }) {
                           <OwnerQATooltip
                             qa={qaByOwner[student.studentId]}
                             reviews={(reviewsByClip && reviewsByClip[student.studentId]) || []}
+                            ownerSheetUrl={semesterMeta?.qaOwnerSheetUrl || ''}
+                            ownerId={student.studentId}
                           />
                         </td>
                       )}
@@ -1570,6 +1572,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
           onOverride={saveQaOverride}
           getClipLink={(clipCode) => getCanvasLink(studentIdToCanvasId[clipCode])}
           peerReviewLink={getCanvasPeerReviewLink()}
+          reviewerSheetUrl={semesterMeta?.qaReviewerSheetUrl || ''}
           onClose={() => setQaDetail(null)}
         />
       )}
@@ -1630,7 +1633,7 @@ function StatCard({ label, value, icon: Icon, color }) {
 }
 
 // QADetailModal - หน้าต่างดูรายคลิป Q&A ให้ TA ตรวจคู่ที่ก้ำกึ่งด้วยตา + แก้คะแนน 0/1
-function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEffScore, onOverride, getClipLink, peerReviewLink, onClose }) {
+function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEffScore, onOverride, getClipLink, peerReviewLink, reviewerSheetUrl, onClose }) {
   const { graderName, agg, reviews } = detail;
   const effScore = (r) => (reviewEffScore ? reviewEffScore(r) : (r.full ? 1 : 0));
   const liveTotal = Math.min((reviews || []).reduce((acc, r) => acc + effScore(r), 0), 3);
@@ -1821,8 +1824,12 @@ function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEff
                 <div className="mt-3 bg-slate-950/60 border border-white/10 rounded-lg p-3">
                   <div className="text-xs mb-2 flex items-center justify-between flex-wrap gap-1">
                     <span className="text-slate-400 font-medium">สำเนาคำตอบจาก MS Form (ไฟล์ผู้รีวิว)</span>
-                    {r.rowNumber != null && (
-                      <span className="text-amber-300">📄 เปิด xlsx ที่ดาวน์โหลด → แถวที่ {r.rowNumber} เพื่อยืนยันต้นทาง</span>
+                    {reviewerSheetUrl ? (
+                      <a href={reviewerSheetUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300">
+                        <ExternalLink className="w-3.5 h-3.5" /> เปิดชีตออนไลน์ (Ctrl+F ค้น {r.reviewerEmail || 'อีเมล'})
+                      </a>
+                    ) : (
+                      r.rowNumber != null && <span className="text-slate-500">ไฟล์ที่ดาวน์โหลด แถวที่ {r.rowNumber}</span>
                     )}
                   </div>
                   <div className="space-y-1.5 text-xs">
@@ -1847,7 +1854,7 @@ function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEff
                       );
                     })()}
                   </div>
-                  <div className="text-[11px] text-slate-500 mt-2">* นี่คือสำเนาที่ระบบอ่านจากไฟล์ — หากสงสัยว่าอ่านตกหล่น เปิด xlsx ต้นฉบับที่แถวด้านบนเทียบได้</div>
+                  <div className="text-[11px] text-slate-500 mt-2">* นี่คือสำเนาที่ระบบอ่านจากไฟล์ — หากสงสัยว่าอ่านตกหล่น เปิดชีตออนไลน์แล้ว Ctrl+F ค้นด้วยอีเมลเทียบต้นทางได้</div>
                 </div>
               </div>
             );
@@ -1866,7 +1873,7 @@ function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEff
 }
 
 // OwnerQATooltip - คะแนน "ตอบคำถามท้ายคลิป" ของเจ้าของ + hover ดูคำถาม/ผู้รีวิว
-function OwnerQATooltip({ qa, reviews }) {
+function OwnerQATooltip({ qa, reviews, ownerSheetUrl, ownerId }) {
   const [open, setOpen] = useState(false);
   const score = qa ? qa.score : 0;
   const scoreColor = !qa ? 'text-red-400' : score >= 2 ? 'text-green-400' : score === 1 ? 'text-amber-400' : 'text-red-400';
@@ -1900,9 +1907,15 @@ function OwnerQATooltip({ qa, reviews }) {
 
           {/* คำถามท้ายคลิป */}
           <div>
-            <div className="text-xs text-slate-500 mb-0.5 flex items-center justify-between">
+            <div className="text-xs text-slate-500 mb-0.5 flex items-center justify-between gap-2">
               <span>คำถามท้ายคลิป (เจ้าของระบุ)</span>
-              {qa?.rowNumber != null && <span className="text-slate-500">MS Form (ไฟล์เจ้าของ) แถวที่ {qa.rowNumber}</span>}
+              {ownerSheetUrl ? (
+                <a href={ownerSheetUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300 shrink-0">
+                  <ExternalLink className="w-3 h-3" /> เปิดชีต (ค้น {ownerId})
+                </a>
+              ) : (
+                qa?.rowNumber != null && <span className="text-slate-500 shrink-0">ไฟล์เจ้าของ แถวที่ {qa.rowNumber}</span>
+              )}
             </div>
             <div className="text-xs text-slate-200 whitespace-pre-wrap break-words">
               {qa?.question || <span className="text-slate-500 italic">— ไม่ได้ตั้งคำถาม / ไม่ส่งฟอร์ม —</span>}

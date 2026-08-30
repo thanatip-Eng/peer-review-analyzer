@@ -214,6 +214,14 @@ service cloud.firestore {
 
 ---
 
+## 4.3 ลิงก์ Excel Online สำหรับ TA ตรวจต้นทาง (ไม่เกี่ยว Firebase)
+ในหน้า "จัดการ" การ์ด Q&A มีช่องใส่ **ลิงก์ Excel Online** ของไฟล์เจ้าของ/ผู้รีวิว (SharePoint/OneDrive)
+เพื่อให้ TA กดเปิดชีตต้นทางแล้ว **Ctrl+F ค้นด้วยอีเมล** ยืนยันคำตอบได้
+- ต้องตั้ง **การแชร์** ไฟล์ Excel Online ให้ TA เปิดได้ (แชร์ระดับองค์กร CMU หรือ "anyone with the link")
+- ระบบเก็บลิงก์ไว้ใน semester doc (ฟิลด์ `qaOwnerSheetUrl` / `qaReviewerSheetUrl`) — เขียนได้เฉพาะ admin (rule เดิมครอบคลุมแล้ว)
+
+---
+
 ## 5. เพิ่ม Web App และ Config
 
 ### Step 5.1: เพิ่ม Web App
