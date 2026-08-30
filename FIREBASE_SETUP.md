@@ -125,12 +125,15 @@ service cloud.firestore {
     }
     
     // Collection: users
-    // เก็บข้อมูลผู้ใช้ (admin, ta)
+    // เก็บข้อมูลผู้ใช้ (admin, ta, pending)
     match /users/{userId} {
       // อ่านได้เฉพาะ: ตัวเอง หรือ admin
       allow read: if isLoggedIn() && (request.auth.uid == userId || isAdmin());
-      // เขียนได้เฉพาะ: admin
-      allow write: if isAdmin();
+      // ผู้ใช้ใหม่สร้าง doc ตัวเองเป็น pending ได้ (ตอน login ด้วย Google ครั้งแรก)
+      allow create: if request.auth.uid == userId && request.resource.data.role == 'pending';
+      // แก้ข้อมูลตัวเองได้ แต่ห้ามเปลี่ยน role (กันยกระดับสิทธิ์เอง) — admin แก้ได้ทุกอย่าง
+      allow update: if isAdmin() || (request.auth.uid == userId && request.resource.data.role == resource.data.role);
+      allow delete: if isAdmin();
     }
     
     // Collection: semesters
@@ -176,6 +179,12 @@ service cloud.firestore {
         allow read: if isLoggedIn() && (isAdmin() || isTA());
         allow write: if isAdmin() || isTA();
       }
+
+      // เผื่อ subcollection อื่น ๆ ในอนาคต: อ่านได้ (admin/ta), เขียนได้เฉพาะ admin
+      match /{document=**} {
+        allow read: if isLoggedIn() && (isAdmin() || isTA());
+        allow write: if isAdmin();
+      }
     }
     
     // Collection: taAssignments
@@ -183,6 +192,12 @@ service cloud.firestore {
     match /taAssignments/{odcId} {
       allow read: if isLoggedIn() && (isAdmin() || isTA());
       allow write: if isAdmin();
+    }
+
+    // Collection: canvasConfigs
+    // เก็บ Canvas API token ของแต่ละคน (คีย์ด้วย uid) — เจ้าของอ่าน/เขียนของตัวเองได้
+    match /canvasConfigs/{userId} {
+      allow read, write: if isLoggedIn() && request.auth.uid == userId;
     }
     
     // Collection: settings
