@@ -2204,11 +2204,11 @@ function CanvasExportModal({ semesterId, semesterMeta, maxScore, people, onClose
     if (headers.owner.trim()) cols.push({ key: 'ownerQa', header: headers.owner.trim(), pp: 2 });
     if (headers.peer.trim()) cols.push({ key: 'peer', header: headers.peer.trim(), pp: 3 });
 
-    const fixed = ['Student', 'ID', 'SIS User ID', 'SIS Login ID', 'Section'];
+    const fixed = ['Student', 'ID', 'SIS User ID', 'SIS Login ID', 'Integration ID', 'Section'];
     const headerRow = [...fixed, ...cols.map(c => c.header)];
-    const ppRow = ['Points Possible', '', '', '', '', ...cols.map(c => c.pp)];
+    const ppRow = ['Points Possible', '', '', '', '', '', ...cols.map(c => c.pp)];
     const dataRows = people.map(p => ([
-      p.name, p.canvasUserId ?? '', p.sisId, '', '',
+      p.name, p.canvasUserId ?? '', p.sisId, '', '', '',
       ...cols.map(c => (p[c.key] === '' || p[c.key] == null ? '' : p[c.key])),
     ]));
     const all = [headerRow, ppRow, ...dataRows];
