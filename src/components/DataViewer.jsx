@@ -1,6 +1,6 @@
 // src/components/DataViewer.jsx
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { doc, getDoc, setDoc, collection, getDocs, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, getDocs, onSnapshot, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { getFlaggedStudents, getFlaggedGraders } from '../utils/csvParser';
@@ -34,6 +34,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
   const [qaByOwner, setQaByOwner] = useState(null);       // sisId -> คะแนนเจ้าของคลิป (ตั้งคำถาม/ตอบเอง)
   const [reviewsByClip, setReviewsByClip] = useState(null); // sisId(เจ้าของ) -> [{reviewerName, transcribedQ}]
   const [qaOverrides, setQaOverrides] = useState({});     // `${reviewerId}__${clipCode}` -> { score:0|1, ... } TA แก้คะแนนรีวิว
+  const [notice, setNotice] = useState(null);             // { text, type:'success'|'error' } toast ยืนยันการบันทึก
   const [clipOverrides, setClipOverrides] = useState({}); // studentId -> { taScore, ... } คะแนนคลิปที่ TA ให้
   const [clipModal, setClipModal] = useState(null);       // { student } เปิดให้ TA ใส่คะแนนคลิป
   const [canvasExportOpen, setCanvasExportOpen] = useState(false); // modal ส่งออก Canvas
@@ -205,25 +206,8 @@ export default function DataViewer({ semesterId, taAssignment }) {
           setReviewsByClip(null);
         }
 
-        // TA overrides คะแนนรีวิว Q&A (0/1)
-        try {
-          const ovSnap = await getDocs(collection(db, 'semesters', semesterId, 'qaReviewOverrides'));
-          const ov = {};
-          ovSnap.docs.forEach((d) => { ov[d.id] = d.data(); });
-          setQaOverrides(ov);
-        } catch {
-          setQaOverrides({});
-        }
-
-        // TA overrides คะแนนคลิป (คะแนนรูบริค)
-        try {
-          const cSnap = await getDocs(collection(db, 'semesters', semesterId, 'clipScoreOverrides'));
-          const cov = {};
-          cSnap.docs.forEach((d) => { cov[d.id] = d.data(); });
-          setClipOverrides(cov);
-        } catch {
-          setClipOverrides({});
-        }
+        // หมายเหตุ: คะแนนที่ TA แก้ (qaReviewOverrides / clipScoreOverrides) โหลดแบบ realtime
+        // ใน useEffect แยกด้านล่าง (onSnapshot) เพื่อให้เห็นการอัปเดตข้าม TA/แท็บ ทันที
       } catch (err) {
         console.error('Error fetching data:', err);
         setError(`เกิดข้อผิดพลาด: ${err.message}`);
@@ -233,6 +217,22 @@ export default function DataViewer({ semesterId, taAssignment }) {
     }
     
     fetchData();
+  }, [semesterId]);
+
+  // Realtime: คะแนนที่ TA แก้ (0/1 รายรีวิว + คะแนนคลิป) — อัปเดตสด ข้าม TA/แท็บ ไม่ต้อง refresh
+  useEffect(() => {
+    if (!semesterId) return;
+    const unsubQa = onSnapshot(
+      collection(db, 'semesters', semesterId, 'qaReviewOverrides'),
+      (snap) => { const ov = {}; snap.docs.forEach((d) => { ov[d.id] = d.data(); }); setQaOverrides(ov); },
+      () => {}
+    );
+    const unsubClip = onSnapshot(
+      collection(db, 'semesters', semesterId, 'clipScoreOverrides'),
+      (snap) => { const cov = {}; snap.docs.forEach((d) => { cov[d.id] = d.data(); }); setClipOverrides(cov); },
+      () => {}
+    );
+    return () => { unsubQa(); unsubClip(); };
   }, [semesterId]);
 
   // Get student group
@@ -291,7 +291,13 @@ export default function DataViewer({ semesterId, taAssignment }) {
     return m;
   }, [data]);
 
-  // บันทึก override คะแนนรีวิว (TA/Admin)
+  // toast ยืนยันการบันทึก (auto-hide)
+  const showNotice = useCallback((text, type = 'success') => {
+    setNotice({ text, type });
+    setTimeout(() => setNotice((n) => (n && n.text === text ? null : n)), 3500);
+  }, []);
+
+  // บันทึก override คะแนนรีวิว (TA/Admin) — โยน error ต่อถ้าบันทึกไม่สำเร็จ
   const saveQaOverride = useCallback(async (reviewerId, clipCode, score) => {
     if (!semesterId || !reviewerId || !clipCode) return;
     const key = qaReviewKey(reviewerId, clipCode);
@@ -301,9 +307,15 @@ export default function DataViewer({ semesterId, taAssignment }) {
       updatedByName: userData?.displayName || currentUser?.email || '',
       updatedAt: serverTimestamp(),
     };
-    await setDoc(doc(db, 'semesters', semesterId, 'qaReviewOverrides', key), payload, { merge: true });
-    setQaOverrides(prev => ({ ...prev, [key]: { ...prev[key], ...payload } }));
-  }, [semesterId, currentUser, userData]);
+    try {
+      await setDoc(doc(db, 'semesters', semesterId, 'qaReviewOverrides', key), payload, { merge: true });
+      setQaOverrides(prev => ({ ...prev, [key]: { ...prev[key], ...payload } }));
+      showNotice(`บันทึกคะแนนรีวิว (${score}) แล้ว`, 'success');
+    } catch (err) {
+      showNotice(`บันทึกไม่สำเร็จ: ${err?.message || err} (ตรวจสิทธิ์ Firestore rules)`, 'error');
+      throw err;
+    }
+  }, [semesterId, currentUser, userData, showNotice]);
 
   // ===== คะแนนคลิป "สิ้นสุด" (เกณฑ์: กระจาย = max−min > 2) =====
   const SPREAD_LIMIT = 2;
@@ -344,17 +356,24 @@ export default function DataViewer({ semesterId, taAssignment }) {
 
   const saveClipOverride = useCallback(async (studentId, taScore, note) => {
     if (!semesterId || !studentId) return;
+    const cleared = taScore == null || taScore === '';
     const payload = {
       studentId,
-      taScore: taScore == null || taScore === '' ? null : Number(taScore),
+      taScore: cleared ? null : Number(taScore),
       note: note || '',
       updatedBy: currentUser?.uid || '',
       updatedByName: userData?.displayName || currentUser?.email || '',
       updatedAt: serverTimestamp(),
     };
-    await setDoc(doc(db, 'semesters', semesterId, 'clipScoreOverrides', studentId), payload, { merge: true });
-    setClipOverrides(prev => ({ ...prev, [studentId]: { ...prev[studentId], ...payload } }));
-  }, [semesterId, currentUser, userData]);
+    try {
+      await setDoc(doc(db, 'semesters', semesterId, 'clipScoreOverrides', studentId), payload, { merge: true });
+      setClipOverrides(prev => ({ ...prev, [studentId]: { ...prev[studentId], ...payload } }));
+      showNotice(cleared ? 'ล้างคะแนน TA แล้ว' : `บันทึกคะแนนรูบริค (${payload.taScore}) แล้ว`, 'success');
+    } catch (err) {
+      showNotice(`บันทึกไม่สำเร็จ: ${err?.message || err} (ตรวจสิทธิ์ Firestore rules)`, 'error');
+      throw err;
+    }
+  }, [semesterId, currentUser, userData, showNotice]);
 
   // student object ตาม sisId (data.students คีย์ด้วย "sisId ชื่อ")
   const studentsById = useMemo(() => {
@@ -1611,6 +1630,17 @@ export default function DataViewer({ semesterId, taAssignment }) {
           onClose={() => setCanvasExportOpen(false)}
         />
       )}
+
+      {/* Toast ยืนยันการบันทึก / แจ้ง error */}
+      {notice && (
+        <div className={`fixed bottom-5 left-1/2 -translate-x-1/2 z-[60] px-4 py-3 rounded-xl shadow-2xl border text-sm flex items-center gap-2 max-w-[90vw] ${
+          notice.type === 'error' ? 'bg-red-900/90 border-red-500/40 text-red-100' : 'bg-green-900/90 border-green-500/40 text-green-100'
+        }`}>
+          {notice.type === 'error' ? <AlertCircle className="w-4 h-4 shrink-0" /> : <CheckCircle2 className="w-4 h-4 shrink-0" />}
+          <span className="break-words">{notice.text}</span>
+          <button onClick={() => setNotice(null)} className="ml-1 opacity-70 hover:opacity-100"><X className="w-4 h-4" /></button>
+        </div>
+      )}
     </div>
   );
 }
@@ -1789,7 +1819,7 @@ function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEff
                       {[0, 1].map((v) => (
                         <button
                           key={v}
-                          onClick={() => onOverride && onOverride(r.reviewerId, r.clipCode, v)}
+                          onClick={() => { if (onOverride) Promise.resolve(onOverride(r.reviewerId, r.clipCode, v)).catch(() => {}); }}
                           disabled={!r.reviewerId || !r.clipCode}
                           className={`px-3 py-1 rounded-lg text-sm font-semibold transition disabled:opacity-40 ${
                             eff === v ? (v === 1 ? 'bg-green-600 text-white' : 'bg-red-600 text-white') : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
@@ -2043,7 +2073,16 @@ function ClipScoreModal({ student, maxScore, canEdit, info, reviewerScores, curr
 
   const doSave = async () => {
     setSaving(true);
-    try { await onSave(student.studentId, val, note); onClose(); } finally { setSaving(false); }
+    try { await onSave(student.studentId, val, note); onClose(); }
+    catch { /* บันทึกไม่สำเร็จ — เปิด modal ค้างไว้ (มี toast แจ้ง error แล้ว) */ }
+    finally { setSaving(false); }
+  };
+
+  const doClear = async () => {
+    setSaving(true);
+    try { setVal(''); await onSave(student.studentId, '', note); onClose(); }
+    catch { /* toast แจ้ง error แล้ว */ }
+    finally { setSaving(false); }
   };
 
   return (
@@ -2101,7 +2140,12 @@ function ClipScoreModal({ student, maxScore, canEdit, info, reviewerScores, curr
                 placeholder="โน้ต (ถ้ามี)"
                 className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm"
               />
-              {currentTa?.updatedByName && <div className="text-xs text-slate-500">แก้ล่าสุดโดย {currentTa.updatedByName}</div>}
+              {currentTa?.updatedByName && (
+                <div className="text-xs text-slate-500">
+                  ✓ บันทึกล่าสุดโดย {currentTa.updatedByName}
+                  {currentTa.updatedAt?.toDate && ` · ${currentTa.updatedAt.toDate().toLocaleString('th-TH')}`}
+                </div>
+              )}
             </div>
           ) : (
             <div className="text-sm text-slate-400">เฉพาะ TA/Admin เท่านั้นที่ใส่คะแนนได้</div>
@@ -2110,7 +2154,7 @@ function ClipScoreModal({ student, maxScore, canEdit, info, reviewerScores, curr
 
         <div className="p-4 border-t border-white/10 flex justify-end gap-2">
           {canEdit && val !== '' && (
-            <button onClick={() => { setVal(''); onSave(student.studentId, '', note); onClose(); }} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm">ล้างคะแนน TA</button>
+            <button onClick={doClear} disabled={saving} className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm disabled:opacity-50">ล้างคะแนน TA</button>
           )}
           <button onClick={onClose} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm">ปิด</button>
           {canEdit && <button onClick={doSave} disabled={saving} className="px-4 py-2 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium disabled:opacity-50">{saving ? 'กำลังบันทึก...' : 'บันทึกคะแนน'}</button>}
