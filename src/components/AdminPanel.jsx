@@ -1320,6 +1320,9 @@ export default function AdminPanel({ onViewData }) {
                         <div><span className="text-slate-400">รีวิวทั้งหมด:</span> {qaPreview.stats.reviewCount}</div>
                         <div><span className="text-slate-400">จับคู่เจ้าของได้:</span> {qaPreview.stats.ownerResolvedPct}%</div>
                         <div><span className="text-slate-400">ผ่านครบ (ดู+ตอบ):</span> {qaPreview.stats.fullCount}</div>
+                        {qaPreview.stats.creditedNoQuestionCount != null && (
+                          <div><span className="text-slate-400">ให้เครดิต (เจ้าของไม่ตั้งคำถาม):</span> {qaPreview.stats.creditedNoQuestionCount}</div>
+                        )}
                       </div>
                       {qaPreview.stats.ownerCount != null && (
                         <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm mb-2 pt-2 border-t border-white/5">

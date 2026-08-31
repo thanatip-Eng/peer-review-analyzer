@@ -253,7 +253,11 @@ export function computeQA({ ownerData, reviewerData, students, graders, threshol
     const matchScore = ownerQuestion ? questionSimilarity(ownerQuestion, rv.transcribedQ) : null;
     const watched = matchScore != null && matchScore >= threshold;
     const answered = substantive(rv.myAnswer);
-    const full = watched && answered;
+    // เจ้าของไม่ได้ตั้งคำถาม → ไม่มีคำถามให้เทียบ = ไม่ใช่ความผิดผู้รีวิว
+    // ให้เครดิตตามคำตอบ (bad_clipcode ไม่เข้า — เป็นการพิมพ์รหัสผิด ให้ TA ตรวจ)
+    const ownerNoQuestion = !ownerQuestion && (reason === 'owner_not_submitted' || reason === 'linked_no_question');
+    const credited = watched || ownerNoQuestion;
+    const full = answered && credited;
 
     reviews.push({
       reviewerId,
@@ -268,6 +272,7 @@ export function computeQA({ ownerData, reviewerData, students, graders, threshol
       watched,
       answered,
       full,
+      ownerNoQuestion, // เจ้าของไม่ตั้งคำถาม → ให้เครดิตตามคำตอบ (ไว้แยกป้ายฝั่ง UI)
       publish: rv.publish,
       reason, // '' ถ้าเจอคำถาม, else bad_clipcode|linked_no_question|owner_not_submitted
       rowNumber: rv.rowNumber ?? null, // แถวใน MS Form ไฟล์ผู้รีวิว
@@ -284,6 +289,8 @@ export function computeQA({ ownerData, reviewerData, students, graders, threshol
         watched: 0,
         answered: 0,
         full: 0,
+        mismatch: 0,      // ตอบแต่คำถามไม่ตรง (เจ้าของมีคำถาม) = อาจไม่ได้ดู
+        creditedNoQ: 0,   // ได้เครดิตเพราะเจ้าของไม่ตั้งคำถาม
         clips: [],
       };
     }
@@ -292,6 +299,8 @@ export function computeQA({ ownerData, reviewerData, students, graders, threshol
     if (watched) a.watched++;
     if (answered) a.answered++;
     if (full) a.full++;
+    if (answered && !watched && !ownerNoQuestion) a.mismatch++;
+    if (ownerNoQuestion && answered) a.creditedNoQ++;
     if (rv.clipCode) a.clips.push(rv.clipCode);
   });
 
@@ -299,7 +308,8 @@ export function computeQA({ ownerData, reviewerData, students, graders, threshol
   Object.values(reviewers).forEach((a) => {
     a.qaScore = Math.min(a.full, QA_REVIEW_TARGET);
     a.flags = [];
-    if (a.answered > a.watched) a.flags.push('qa_no_match'); // ตอบแต่คำถามไม่ตรง = อาจไม่ได้ดู
+    if (a.mismatch > 0) a.flags.push('qa_no_match'); // ตอบแต่คำถามไม่ตรง (เจ้าของมีคำถาม) = อาจไม่ได้ดู
+    if (a.creditedNoQ > 0) a.flags.push('qa_owner_no_question'); // ได้เครดิตเพราะเจ้าของไม่ตั้งคำถาม — TA สุ่มตรวจได้
     if (a.full < QA_REVIEW_TARGET) a.flags.push('qa_incomplete');
   });
 
@@ -310,6 +320,7 @@ export function computeQA({ ownerData, reviewerData, students, graders, threshol
     ownerResolved: resolvedOwner,
     ownerResolvedPct: reviews.length ? Math.round((100 * resolvedOwner) / reviews.length) : 0,
     fullCount: reviews.filter((r) => r.full).length,
+    creditedNoQuestionCount: reviews.filter((r) => r.ownerNoQuestion && r.answered).length, // ได้เครดิตเพราะเจ้าของไม่ตั้งคำถาม
     threshold,
     target: QA_REVIEW_TARGET,
     unresolved, // เคส "ไม่พบคำถามต้นฉบับ" แยกตามสาเหตุ

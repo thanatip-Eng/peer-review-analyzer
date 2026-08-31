@@ -564,6 +564,8 @@ export default function DataViewer({ semesterId, taAssignment }) {
         const agg = qaByGrader[g.graderId]?.agg;
         if (graderFilters.qaTotal === 'noMatch') {
           matchQaTotal = !!agg?.flags?.includes('qa_no_match');
+        } else if (graderFilters.qaTotal === 'ownerNoQ') {
+          matchQaTotal = !!agg?.flags?.includes('qa_owner_no_question');
         } else {
           matchQaTotal = (graderQaTotal(g.graderId) ?? 0) === Number(graderFilters.qaTotal);
         }
@@ -1297,6 +1299,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                     <option value="1">ได้ 1</option>
                     <option value="0">0 คะแนน</option>
                     <option value="noMatch">⚠️ ตอบแต่คำถามไม่ตรง</option>
+                    <option value="ownerNoQ">เจ้าของไม่ตั้งคำถาม (ให้เครดิต)</option>
                   </select>
                 </div>
               )}
@@ -1413,6 +1416,9 @@ export default function DataViewer({ semesterId, taAssignment }) {
                                 {edited && <span title="TA ปรับคะแนนแล้ว">✏️</span>}
                                 {a.flags && a.flags.includes('qa_no_match') && (
                                   <span title="ตอบแต่คำถามไม่ตรง — อาจไม่ได้ดู">⚠️</span>
+                                )}
+                                {a.flags && a.flags.includes('qa_owner_no_question') && (
+                                  <span className="text-emerald-400 text-xs" title="มีคลิปที่เจ้าของไม่ตั้งคำถาม — ให้เครดิตตามคำตอบ (TA สุ่มตรวจได้)">ⓘ</span>
                                 )}
                                 <Search className="w-3.5 h-3.5 text-slate-500" />
                               </button>
@@ -1794,7 +1800,9 @@ function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEff
                   <div className="flex items-center gap-2">
                     {r.watched
                       ? <span className="text-xs px-2 py-0.5 rounded bg-green-900/40 text-green-300">✓ คำถามตรง</span>
-                      : <span className="text-xs px-2 py-0.5 rounded bg-red-900/40 text-red-300">✗ คำถามไม่ตรง</span>}
+                      : r.ownerNoQuestion
+                        ? <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-300">— ไม่มีคำถามให้เทียบ</span>
+                        : <span className="text-xs px-2 py-0.5 rounded bg-red-900/40 text-red-300">✗ คำถามไม่ตรง</span>}
                     {r.answered
                       ? <span className="text-xs px-2 py-0.5 rounded bg-green-900/40 text-green-300">✓ ตั้งใจตอบ</span>
                       : <span className="text-xs px-2 py-0.5 rounded bg-slate-700 text-slate-400">✗ ไม่ได้ตอบ</span>}
@@ -1812,9 +1820,11 @@ function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEff
                         ✏️ TA ปรับ (อัตโนมัติ {r.full ? 1 : 0})
                       </span>
                     )}
-                    {!r.watched && r.answered && (
+                    {r.ownerNoQuestion && r.answered ? (
+                      <span className="text-xs px-2 py-0.5 rounded bg-emerald-900/40 text-emerald-300">เจ้าของไม่ตั้งคำถาม — ให้เครดิตตามคำตอบ (TA ตรวจได้)</span>
+                    ) : !r.watched && r.answered ? (
                       <span className="text-xs px-2 py-0.5 rounded bg-amber-900/40 text-amber-300">⚠️ ตอบแต่คำถามไม่ตรง — ควรเช็คคลิป</span>
-                    )}
+                    ) : null}
                   </div>
                   {canEdit && (
                     <div className="flex items-center gap-1">
