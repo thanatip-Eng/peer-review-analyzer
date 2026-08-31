@@ -18,7 +18,7 @@ import { db, secondaryAuth } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { parseCSV } from '../utils/csvParser';
 import { fetchCourses, fetchAssignments, fetchPeerReviewData, DEFAULT_CANVAS_URL } from '../utils/canvasApi';
-import { rowsFromArrayBuffer, parseOwnerRows, parseReviewerRows, computeQA } from '../utils/qaMatcher';
+import { rowsFromArrayBuffer, parseOwnerRows, parseReviewerRows, computeQA, QA_MATCH_THRESHOLD } from '../utils/qaMatcher';
 import ConfirmModal from './ConfirmModal';
 import Papa from 'papaparse';
 import { Upload, Users, UserPlus, Settings, Trash2, Edit, Save, X, ChevronRight, CheckCircle2, AlertTriangle, Eye, EyeOff, Mail, Lock, Key, Cloud, Download, RefreshCw, Clock, MessageSquare } from 'lucide-react';
@@ -77,6 +77,7 @@ export default function AdminPanel({ onViewData }) {
   const [qaPreview, setQaPreview] = useState(null);         // ผลจาก computeQA ก่อนบันทึก
   const [qaSheetUrls, setQaSheetUrls] = useState({ owner: '', reviewer: '' }); // ลิงก์ Excel Online ต้นทาง
   const [workMaxScoreInput, setWorkMaxScoreInput] = useState(''); // คะแนนเต็มชิ้นงาน (rubric) สำหรับ TA
+  const [qaThresholdInput, setQaThresholdInput] = useState(''); // เกณฑ์ความคล้ายคำถาม Q&A (0–1)
   const [exportHeaders, setExportHeaders] = useState({ clip: '', owner: '', peer: '' }); // หัวคอลัมน์ปลายทาง export (A1.1/A1.2/A1.3)
   const [qaSheetSaving, setQaSheetSaving] = useState(false);
 
@@ -179,15 +180,16 @@ export default function AdminPanel({ onViewData }) {
 
   // โหลดลิงก์ Excel Online ของรายการที่เลือก (ไว้ prefill)
   useEffect(() => {
-    if (!selectedSemester) { setQaSheetUrls({ owner: '', reviewer: '' }); setWorkMaxScoreInput(''); setExportHeaders({ clip: '', owner: '', peer: '' }); return; }
+    if (!selectedSemester) { setQaSheetUrls({ owner: '', reviewer: '' }); setWorkMaxScoreInput(''); setQaThresholdInput(''); setExportHeaders({ clip: '', owner: '', peer: '' }); return; }
     (async () => {
       try {
         const snap = await getDoc(doc(db, 'semesters', selectedSemester));
         const d = snap.exists() ? snap.data() : {};
         setQaSheetUrls({ owner: d.qaOwnerSheetUrl || '', reviewer: d.qaReviewerSheetUrl || '' });
         setWorkMaxScoreInput(d.workMaxScore != null ? String(d.workMaxScore) : '');
+        setQaThresholdInput(d.qaMatchThreshold != null ? String(d.qaMatchThreshold) : '');
         setExportHeaders({ clip: d.exportClipHeader || '', owner: d.exportOwnerHeader || '', peer: d.exportPeerHeader || '' });
-      } catch { setQaSheetUrls({ owner: '', reviewer: '' }); setWorkMaxScoreInput(''); setExportHeaders({ clip: '', owner: '', peer: '' }); }
+      } catch { setQaSheetUrls({ owner: '', reviewer: '' }); setWorkMaxScoreInput(''); setQaThresholdInput(''); setExportHeaders({ clip: '', owner: '', peer: '' }); }
     })();
   }, [selectedSemester]);
 
@@ -205,6 +207,8 @@ export default function AdminPanel({ onViewData }) {
       };
       const wm = Number(workMaxScoreInput);
       if (workMaxScoreInput.trim() !== '' && wm > 0) payload.workMaxScore = wm;
+      const th = Number(qaThresholdInput);
+      if (qaThresholdInput.trim() !== '' && th > 0 && th <= 1) payload.qaMatchThreshold = th;
       await setDoc(doc(db, 'semesters', selectedSemester), payload, { merge: true });
       setUploadSuccess('บันทึกตั้งค่ารายการแล้ว');
     } catch (err) {
@@ -544,7 +548,9 @@ export default function AdminPanel({ onViewData }) {
       if (Object.keys(students).length === 0 && Object.keys(graders).length === 0) {
         throw new Error('รายการนี้ยังไม่มีข้อมูล Canvas (roster) — ดึง Canvas ก่อนเพื่อใช้จับคู่รหัส-ชื่อ');
       }
-      const result = computeQA({ ownerData, reviewerData, students, graders });
+      const th = Number(qaThresholdInput);
+      const threshold = qaThresholdInput.trim() !== '' && th > 0 && th <= 1 ? th : QA_MATCH_THRESHOLD;
+      const result = computeQA({ ownerData, reviewerData, students, graders, threshold });
       setQaPreview(result);
     } catch (err) {
       console.error('QA process error:', err);
@@ -1347,6 +1353,12 @@ export default function AdminPanel({ onViewData }) {
                       <input type="number" min="1" step="1" value={workMaxScoreInput} onChange={(e) => setWorkMaxScoreInput(e.target.value)}
                         placeholder="เช่น 11" className="w-40 px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm" />
                       <p className="text-xs text-slate-500 mt-1">ใช้เป็นคะแนนเต็มของ "คะแนนสิ้นสุด" ที่ TA ให้ และช่วงคะแนนในหน้าคะแนนชิ้นงาน (ว่าง = ใช้ค่าจาก Canvas)</p>
+                    </div>
+                    <div className="mb-3">
+                      <label className="block text-xs text-slate-400 mb-1">เกณฑ์ความคล้ายคำถาม Q&amp;A (0–1) — สูง = เข้มงวด</label>
+                      <input type="number" min="0" max="1" step="0.05" value={qaThresholdInput} onChange={(e) => setQaThresholdInput(e.target.value)}
+                        placeholder={`ค่าตั้งต้น ${QA_MATCH_THRESHOLD}`} className="w-40 px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm" />
+                      <p className="text-xs text-slate-500 mt-1">คะแนนคำถามที่ถอด ≥ เกณฑ์นี้ = "ดูจริง (คำถามตรง)" · ปรับค่าแล้วต้องกด "ประมวลผล Q&amp;A" + บันทึกใหม่จึงจะมีผล (ว่าง = ใช้ค่าตั้งต้น)</p>
                     </div>
                     <div className="mb-4">
                       <p className="text-sm font-medium mb-1">คอลัมน์ปลายทางเมื่อส่งออกเข้า Canvas</p>

@@ -9,7 +9,7 @@
 import * as XLSX from 'xlsx';
 
 export const QA_REVIEW_TARGET = 3;      // ต้องรีวิว 3 คลิป
-export const QA_MATCH_THRESHOLD = 0.35; // เกณฑ์ความคล้ายคำถาม (ปรับได้ — ต่ำ=จับ paraphrase ได้มากขึ้น)
+export const QA_MATCH_THRESHOLD = 0.5;  // เกณฑ์ความคล้ายคำถาม (ค่าตั้งต้น — admin ปรับทับได้ต่อรายการ)
 
 // ===== text utils =====
 export function normName(s) {
@@ -30,29 +30,37 @@ function normText(s) {
   if (!s) return '';
   return String(s)
     .toLowerCase()
+    // ตัดคำลงท้ายสุภาพที่เป็น noise (ไม่ใช่คีย์เวิร์ดเนื้อหา) — ไม่ตัด อย่างไร/ทำไม/ไหม ที่เป็นคำถามจริง
+    .replace(/นะคะ|นะครับ|ครับผม|ครับ|ค่ะ|คะ|จ้ะ|จ้า/g, '')
     .replace(/\s+/g, '')
     .replace(/[?？.,!"'’“”\-—_()/\\]+/g, '');
 }
 
-function trigrams(s) {
-  const set = new Set();
+// สร้าง n-gram (bigram + trigram) — bigram ช่วยจับคำไทยสั้น 2-3 พยางค์ได้ดีขึ้น
+function ngrams(s) {
   const t = normText(s);
-  if (t.length < 3) {
-    if (t) set.add(t);
-    return set;
-  }
+  const set = new Set();
+  if (!t) return set;
+  if (t.length < 2) { set.add(t); return set; }
+  for (let i = 0; i <= t.length - 2; i++) set.add(t.slice(i, i + 2));
   for (let i = 0; i <= t.length - 3; i++) set.add(t.slice(i, i + 3));
   return set;
 }
 
-// ความคล้ายคำถามภาษาไทยแบบ trigram Jaccard (0..1)
+// ความคล้ายคำถามภาษาไทย (0..1) — ผสม Dice กับ containment (overlap coefficient)
+// containment = ตัวร่วม / ตัวที่เล็กกว่า → ข้อความสั้นที่เป็น subset ของข้อยาวได้คะแนนสูง
+// แก้ปัญหา Jaccard ที่ลงโทษความยาวต่างกัน (ผู้รีวิวถอดคำถามสั้นแต่คีย์เวิร์ดตรง)
 export function questionSimilarity(a, b) {
-  const A = trigrams(a);
-  const B = trigrams(b);
+  const A = ngrams(a);
+  const B = ngrams(b);
   if (A.size === 0 || B.size === 0) return 0;
   let inter = 0;
   for (const x of A) if (B.has(x)) inter++;
-  return inter / (A.size + B.size - inter);
+  const dice = (2 * inter) / (A.size + B.size);
+  const small = Math.min(A.size, B.size);
+  const contain = inter / small;
+  const w = small < 6 ? 0.5 : 0.85; // ข้อความสั้นมาก → เชื่อ containment น้อยลง กัน match มั่ว
+  return Math.max(dice, w * contain);
 }
 
 function substantive(s) {
