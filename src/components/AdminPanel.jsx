@@ -77,6 +77,7 @@ export default function AdminPanel({ onViewData }) {
   const [qaPreview, setQaPreview] = useState(null);         // ผลจาก computeQA ก่อนบันทึก
   const [qaSheetUrls, setQaSheetUrls] = useState({ owner: '', reviewer: '' }); // ลิงก์ Excel Online ต้นทาง
   const [workMaxScoreInput, setWorkMaxScoreInput] = useState(''); // คะแนนเต็มชิ้นงาน (rubric) สำหรับ TA
+  const [exportHeaders, setExportHeaders] = useState({ clip: '', owner: '', peer: '' }); // หัวคอลัมน์ปลายทาง export (A1.1/A1.2/A1.3)
   const [qaSheetSaving, setQaSheetSaving] = useState(false);
 
   // Confirm modal state
@@ -178,14 +179,15 @@ export default function AdminPanel({ onViewData }) {
 
   // โหลดลิงก์ Excel Online ของรายการที่เลือก (ไว้ prefill)
   useEffect(() => {
-    if (!selectedSemester) { setQaSheetUrls({ owner: '', reviewer: '' }); setWorkMaxScoreInput(''); return; }
+    if (!selectedSemester) { setQaSheetUrls({ owner: '', reviewer: '' }); setWorkMaxScoreInput(''); setExportHeaders({ clip: '', owner: '', peer: '' }); return; }
     (async () => {
       try {
         const snap = await getDoc(doc(db, 'semesters', selectedSemester));
         const d = snap.exists() ? snap.data() : {};
         setQaSheetUrls({ owner: d.qaOwnerSheetUrl || '', reviewer: d.qaReviewerSheetUrl || '' });
         setWorkMaxScoreInput(d.workMaxScore != null ? String(d.workMaxScore) : '');
-      } catch { setQaSheetUrls({ owner: '', reviewer: '' }); setWorkMaxScoreInput(''); }
+        setExportHeaders({ clip: d.exportClipHeader || '', owner: d.exportOwnerHeader || '', peer: d.exportPeerHeader || '' });
+      } catch { setQaSheetUrls({ owner: '', reviewer: '' }); setWorkMaxScoreInput(''); setExportHeaders({ clip: '', owner: '', peer: '' }); }
     })();
   }, [selectedSemester]);
 
@@ -197,6 +199,9 @@ export default function AdminPanel({ onViewData }) {
       const payload = {
         qaOwnerSheetUrl: qaSheetUrls.owner.trim(),
         qaReviewerSheetUrl: qaSheetUrls.reviewer.trim(),
+        exportClipHeader: exportHeaders.clip.trim(),
+        exportOwnerHeader: exportHeaders.owner.trim(),
+        exportPeerHeader: exportHeaders.peer.trim(),
       };
       const wm = Number(workMaxScoreInput);
       if (workMaxScoreInput.trim() !== '' && wm > 0) payload.workMaxScore = wm;
@@ -1342,6 +1347,27 @@ export default function AdminPanel({ onViewData }) {
                       <input type="number" min="1" step="1" value={workMaxScoreInput} onChange={(e) => setWorkMaxScoreInput(e.target.value)}
                         placeholder="เช่น 11" className="w-40 px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm" />
                       <p className="text-xs text-slate-500 mt-1">ใช้เป็นคะแนนเต็มของ "คะแนนสิ้นสุด" ที่ TA ให้ และช่วงคะแนนในหน้าคะแนนชิ้นงาน (ว่าง = ใช้ค่าจาก Canvas)</p>
+                    </div>
+                    <div className="mb-4">
+                      <p className="text-sm font-medium mb-1">คอลัมน์ปลายทางเมื่อส่งออกเข้า Canvas</p>
+                      <p className="text-xs text-slate-500 mb-2">กรอกเป็น <span className="text-slate-300">"ชื่อ assignment (id)"</span> เพื่อ<span className="text-slate-300">อัปเดต assignment เดิม</span> (ชื่อเปล่า = สร้างใหม่) · หา id ได้จาก URL ของ assignment บน Canvas เช่น <span className="text-slate-300">.../assignments/<b>123456</b></span></p>
+                      <div className="space-y-2">
+                        <div>
+                          <label className="block text-xs text-purple-300 mb-1">คะแนนคลิป → A1.1</label>
+                          <input type="text" value={exportHeaders.clip} onChange={(e) => setExportHeaders(s => ({ ...s, clip: e.target.value }))}
+                            placeholder="เช่น A1.1 คะแนนคลิป (123456)" className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm" />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-amber-400 mb-1">คะแนนตอบคำถามท้ายคลิป → A1.2</label>
+                          <input type="text" value={exportHeaders.owner} onChange={(e) => setExportHeaders(s => ({ ...s, owner: e.target.value }))}
+                            placeholder="เช่น A1.2 ตอบคำถามท้ายคลิป (123457)" className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm" />
+                        </div>
+                        <div>
+                          <label className="block text-xs text-amber-400 mb-1">คะแนน peer review → A1.3</label>
+                          <input type="text" value={exportHeaders.peer} onChange={(e) => setExportHeaders(s => ({ ...s, peer: e.target.value }))}
+                            placeholder="เช่น A1.3 peer review (123458)" className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm" />
+                        </div>
+                      </div>
                     </div>
                     <p className="text-sm font-medium mb-1">ลิงก์ Excel Online (ต้นทางจริง สำหรับ TA เปิดตรวจ)</p>
                     <p className="text-xs text-slate-500 mb-3">วางลิงก์ชีต Excel Online (SharePoint/OneDrive) — TA จะกดเปิดแล้วค้นด้วยอีเมลได้ · แนะนำตั้งการแชร์ให้เปิดได้ทั้งองค์กร</p>

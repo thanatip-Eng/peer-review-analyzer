@@ -317,28 +317,34 @@ export default function DataViewer({ semesterId, taAssignment }) {
     }
   }, [semesterId, currentUser, userData, showNotice]);
 
+  // คะแนนเต็มชิ้นงาน (rubric) — admin ตั้งได้ต่อรายการ (semesterMeta.workMaxScore) ไม่งั้นใช้ค่าจาก Canvas
+  const workMax = Number(semesterMeta?.workMaxScore) > 0 ? Number(semesterMeta.workMaxScore) : (data?.stats?.maxScore || 12);
+
   // ===== คะแนนคลิป "สิ้นสุด" (เกณฑ์: กระจาย = max−min > 2) =====
   const SPREAD_LIMIT = 2;
   const clipFinal = useCallback((student) => {
     const ws = student.workScore || {};
     const grades = (ws.grades || []).filter(g => g != null && !isNaN(g));
     const n = grades.length;
+    const range = n ? (ws.range ?? (Math.max(...grades) - Math.min(...grades))) : 0;
+    const overMax = grades.some(g => g > workMax); // ผู้รีวิวให้เกินคะแนนเต็ม → ต้องให้ TA ตรวจ ห้าม auto
     const taScore = clipOverrides[student.studentId]?.taScore;
     const hasTa = taScore != null && !isNaN(taScore);
-    // auto: รีวิว ≥ 3 และคะแนนไม่กระจาย
-    if (n >= 3 && (ws.range ?? (Math.max(...grades) - Math.min(...grades))) <= SPREAD_LIMIT) {
-      return { status: 'auto', final: ws.max, needsTA: false, hasTa };
+    const autoEligible = n >= 3 && range <= SPREAD_LIMIT && !overMax;
+    // คะแนน TA ชนะ auto เสมอ (ถ้า TA กรอกคะแนนแล้ว ใช้ของ TA)
+    if (hasTa) {
+      if (n === 2) {
+        const combined = [...grades, Number(taScore)];
+        const cRange = Math.max(...combined) - Math.min(...combined);
+        return { status: 'ta', final: cRange <= SPREAD_LIMIT ? Math.max(...combined) : Number(taScore), needsTA: true, hasTa: true, overMax };
+      }
+      // 1 รีวิว หรือ 3+ (รวมกระจาย/เกินเต็ม) → ใช้คะแนน TA
+      return { status: 'ta', final: Number(taScore), needsTA: true, hasTa: true, overMax };
     }
-    // needsTA
-    if (!hasTa) return { status: 'pending', final: null, needsTA: true, hasTa: false };
-    if (n === 2) {
-      const combined = [...grades, Number(taScore)];
-      const cRange = Math.max(...combined) - Math.min(...combined);
-      return { status: 'ta', final: cRange <= SPREAD_LIMIT ? Math.max(...combined) : Number(taScore), needsTA: true, hasTa: true };
-    }
-    // 1 รีวิว หรือ 3+ กระจาย หรือไม่มีรีวิว → ใช้คะแนน TA
-    return { status: 'ta', final: Number(taScore), needsTA: true, hasTa: true };
-  }, [clipOverrides]);
+    // ยังไม่มีคะแนน TA
+    if (autoEligible) return { status: 'auto', final: ws.max, needsTA: false, hasTa: false, overMax: false };
+    return { status: 'pending', final: null, needsTA: true, hasTa: false, overMax }; // รวมเคส overMax → รอตรวจ (แดง)
+  }, [clipOverrides, workMax]);
 
   // คะแนนผู้รีวิวรายคน + ชื่อ (จาก graders' details) ของ นศ. เจ้าของงาน
   const reviewerScoresFor = useCallback((student) => {
@@ -769,9 +775,6 @@ export default function DataViewer({ semesterId, taAssignment }) {
     return 'text-red-400';
   };
 
-  // คะแนนเต็มชิ้นงาน (rubric) — admin ตั้งได้ต่อรายการ (semesterMeta.workMaxScore) ไม่งั้นใช้ค่าจาก Canvas
-  const workMax = Number(semesterMeta?.workMaxScore) > 0 ? Number(semesterMeta.workMaxScore) : (data?.stats?.maxScore || 12);
-
   return (
     <div className="space-y-6">
       {/* Group Filter Bar */}
@@ -1118,9 +1121,9 @@ export default function DataViewer({ semesterId, taAssignment }) {
                               <button
                                 onClick={() => (isAdmin || isTA) && setClipModal({ student })}
                                 className="px-2 py-1 rounded text-xs bg-red-900/40 text-red-300 hover:bg-red-800/50 transition"
-                                title="คะแนนกระจาย/รีวิวไม่ครบ 3 — คลิกเพื่อให้ TA ใส่คะแนน"
+                                title={cf.overMax ? `มีผู้รีวิวให้คะแนนเกินเต็ม ${maxSc} — คลิกเพื่อให้ TA ตรวจ` : 'คะแนนกระจาย/รีวิวไม่ครบ 3 — คลิกเพื่อให้ TA ใส่คะแนน'}
                               >
-                                รอตรวจ
+                                {cf.overMax ? '⚠️ รอตรวจ' : 'รอตรวจ'}
                               </button>
                             </td>
                           );
@@ -2102,8 +2105,13 @@ function ClipScoreModal({ student, maxScore, canEdit, info, reviewerScores, curr
             <span>คะแนนรูบริค: <span className={`font-semibold ${info.final == null ? 'text-red-400' : info.status === 'auto' ? 'text-green-400' : 'text-purple-300'}`}>{info.final == null ? 'รอ TA' : `${info.final}/${maxScore}`}</span></span>
             <span className="text-slate-400">รีวิว {reviewerScores.length} คน</span>
             {info.status === 'auto' && <span className="text-green-400 text-xs">สอดคล้อง → ใช้ Max อัตโนมัติ</span>}
-            {info.needsTA && <span className="text-amber-300 text-xs">ต้องให้ TA ตรวจ (คะแนนกระจาย/รีวิวไม่ครบ 3)</span>}
+            {info.needsTA && !info.overMax && <span className="text-amber-300 text-xs">ต้องให้ TA ตรวจ (คะแนนกระจาย/รีวิวไม่ครบ 3)</span>}
           </div>
+          {info.overMax && (
+            <div className="bg-red-500/15 border border-red-500/40 rounded-lg p-3 text-sm text-red-300 flex items-start gap-2">
+              <span>⚠️</span><span>มีผู้รีวิวให้คะแนนเกินคะแนนเต็ม ({maxScore}) — ต้องให้ TA ตรวจและกรอกคะแนนรูบริคที่ถูกต้อง (ไม่ใช้ Max อัตโนมัติ)</span>
+            </div>
+          )}
 
           {/* คะแนนผู้รีวิวรายคน */}
           <div>
@@ -2118,7 +2126,7 @@ function ClipScoreModal({ student, maxScore, canEdit, info, reviewerScores, curr
                 {reviewerScores.map((rs, i) => (
                   <div key={i} className="flex items-center justify-between text-sm bg-slate-800/40 rounded px-3 py-1.5">
                     <span className="text-slate-300">{rs.graderName}</span>
-                    <span className="font-mono font-semibold text-cyan-400">{rs.gradeGiven == null ? '-' : rs.gradeGiven}/{maxScore}</span>
+                    <span className={`font-mono font-semibold ${rs.gradeGiven != null && rs.gradeGiven > maxScore ? 'text-red-400' : 'text-cyan-400'}`} title={rs.gradeGiven != null && rs.gradeGiven > maxScore ? `เกินคะแนนเต็ม ${maxScore}` : undefined}>{rs.gradeGiven == null ? '-' : rs.gradeGiven}/{maxScore}</span>
                   </div>
                 ))}
               </div>
@@ -2167,12 +2175,20 @@ function ClipScoreModal({ student, maxScore, canEdit, info, reviewerScores, curr
 // CanvasExportModal - ตั้งชื่อคอลัมน์ assignment แล้วดาวน์โหลด CSV รูปแบบ Canvas Gradebook Import
 function CanvasExportModal({ semesterId, semesterMeta, maxScore, people, onClose }) {
   const LS_KEY = `canvasExportHeaders_${semesterId}`;
-  const defaultClip = semesterMeta?.canvasAssignmentId
-    ? `${semesterMeta.assignmentName || 'Clip Score'} (${semesterMeta.canvasAssignmentId})`
-    : 'Clip Score';
+  // ปลายทางที่ admin ตั้งไว้ในหน้าจัดการ (A1.1/A1.2/A1.3) มาก่อน localStorage แล้วค่อยว่าง
+  const cfg = {
+    clip: semesterMeta?.exportClipHeader || '',
+    owner: semesterMeta?.exportOwnerHeader || '',
+    peer: semesterMeta?.exportPeerHeader || '',
+  };
   const [headers, setHeaders] = useState(() => {
-    try { const s = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); if (s) return s; } catch { /* ignore */ }
-    return { clip: defaultClip, owner: 'Q&A ท้ายคลิป', peer: 'Peer Review Q&A' };
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem(LS_KEY) || 'null'); } catch { /* ignore */ }
+    return {
+      clip: cfg.clip || saved?.clip || '',
+      owner: cfg.owner || saved?.owner || '',
+      peer: cfg.peer || saved?.peer || '',
+    };
   });
 
   const csvEscape = (v) => {
