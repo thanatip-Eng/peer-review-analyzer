@@ -19,6 +19,14 @@ const QA_REASON_LABEL = {
   linked_no_question: 'ส่งฟอร์มแต่ลิงก์ไม่ได้',
 };
 
+// bump: ผู้รีวิวขยัน (รีวิว ≥3 คลิป) แต่ได้ 2 คะแนน เพราะตก 1 คลิป (เช่นเปิดคลิปเพื่อนไม่ได้) → ให้ 3
+// เคารพ TA: ถ้ามีคลิปที่ TA กด 0 เอง (ตัดสินว่าคำตอบใช้ไม่ได้) จะไม่ bump
+function applyDiligenceBump(sum, reviews, overrides) {
+  if (sum !== 2 || !reviews || reviews.length < 3) return sum;
+  const taZeroed = reviews.some(r => overrides?.[`${r.reviewerId}__${r.clipCode}`]?.score === 0);
+  return taZeroed ? sum : 3;
+}
+
 export default function DataViewer({ semesterId, taAssignment }) {
   const { isAdmin, isTA, currentUser, userData } = useAuth();
   const [data, setData] = useState(null);
@@ -280,9 +288,10 @@ export default function DataViewer({ semesterId, taAssignment }) {
   const graderQaTotal = useCallback((graderId) => {
     const qa = qaByGrader?.[graderId];
     if (!qa) return null;
-    const sum = (qa.reviews || []).reduce((acc, r) => acc + reviewEffScore(r), 0);
-    return Math.min(sum, 3);
-  }, [qaByGrader, reviewEffScore]);
+    const reviews = qa.reviews || [];
+    const sum = Math.min(reviews.reduce((acc, r) => acc + reviewEffScore(r), 0), 3);
+    return applyDiligenceBump(sum, reviews, qaOverrides);
+  }, [qaByGrader, reviewEffScore, qaOverrides]);
 
   // แผนที่ sisId(เจ้าของ) -> canvasUserId (ไว้ทำลิงก์เปิดคลิปเจ้าของใน modal)
   const studentIdToCanvasId = useMemo(() => {
@@ -1684,7 +1693,9 @@ function StatCard({ label, value, icon: Icon, color }) {
 function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEffScore, onOverride, getClipLink, peerReviewLink, reviewerSheetUrl, onClose }) {
   const { graderName, agg, reviews } = detail;
   const effScore = (r) => (reviewEffScore ? reviewEffScore(r) : (r.full ? 1 : 0));
-  const liveTotal = Math.min((reviews || []).reduce((acc, r) => acc + effScore(r), 0), 3);
+  const rawTotal = Math.min((reviews || []).reduce((acc, r) => acc + effScore(r), 0), 3);
+  const liveTotal = applyDiligenceBump(rawTotal, reviews || [], qaOverrides);
+  const bumped = liveTotal > rawTotal; // ปรับขึ้นเป็น 3 อัตโนมัติ (รีวิวครบ 3 แต่ตก 1 คลิป)
   // ก้ำกึ่ง = matchScore อยู่ในแถบ ±0.1 รอบเกณฑ์ (ควรให้คนตรวจดูเอง)
   const BORDER_BAND = 0.1;
   const isBorderline = (m) => m != null && Math.abs(m - threshold) <= BORDER_BAND;
@@ -1735,6 +1746,11 @@ function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEff
                   {liveTotal}/3
                 </span>
               </span>
+              {bumped && (
+                <span className="text-xs px-2 py-0.5 rounded bg-emerald-900/40 text-emerald-300" title="รีวิวครบ 3 คลิป แต่ตก 1 คลิป (เช่นเปิดคลิปเพื่อนไม่ได้) — ปรับเป็น 3 อัตโนมัติ · TA กด 0 คลิปใดก็จะยกเลิกการปรับ">
+                  ปรับเป็น 3 อัตโนมัติ (รีวิวครบ 3)
+                </span>
+              )}
               <span className="text-slate-400">ส่งรีวิว {agg.submitted}</span>
               <span className="text-slate-400">ดูจริง(คำถามตรง) {agg.watched}</span>
               <span className="text-slate-400">ตั้งใจตอบ {agg.answered}</span>
