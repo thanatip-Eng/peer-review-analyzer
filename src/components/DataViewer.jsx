@@ -215,7 +215,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
           setQaOverrides({});
         }
 
-        // TA overrides คะแนนคลิป (คะแนนสิ้นสุด)
+        // TA overrides คะแนนคลิป (คะแนนรูบริค)
         try {
           const cSnap = await getDocs(collection(db, 'semesters', semesterId, 'clipScoreOverrides'));
           const cov = {};
@@ -652,7 +652,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
         ...(() => {
           const cf = clipFinal(s);
           return {
-            'คะแนนสิ้นสุด': cf.final == null ? 'รอ TA' : cf.final,
+            'คะแนนรูบริค': cf.final == null ? 'รอ TA' : cf.final,
             'ที่มาคะแนนคลิป': cf.status === 'auto' ? 'อัตโนมัติ(Max)' : cf.status === 'ta' ? 'TA' : 'รอตรวจ',
           };
         })(),
@@ -840,7 +840,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
           <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4">
             <div>
               <h3 className="font-semibold flex items-center gap-2"><Download className="w-5 h-5 text-green-400" /> ส่งออกคะแนนเข้า Canvas</h3>
-              <p className="text-sm text-slate-400 mt-1">รวมคะแนนคลิปสิ้นสุด + Q&amp;A เจ้าของ + Peer Review เป็นไฟล์ CSV สำหรับ import กลับ Canvas ({exportPeople.length} คน)</p>
+              <p className="text-sm text-slate-400 mt-1">รวมคะแนนรูบริค + Q&amp;A เจ้าของ + Peer Review เป็นไฟล์ CSV สำหรับ import กลับ Canvas ({exportPeople.length} คน)</p>
             </div>
             <button
               onClick={() => setCanvasExportOpen(true)}
@@ -999,7 +999,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                 </div>
               )}
               <div>
-                <label className="block text-xs text-purple-300 mb-1">คะแนนคลิปสิ้นสุด</label>
+                <label className="block text-xs text-purple-300 mb-1">คะแนนรูบริค</label>
                 <select
                   value={studentFilters.clipReview}
                   onChange={(e) => setStudentFilters(f => ({ ...f, clipReview: e.target.value }))}
@@ -1038,7 +1038,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">Min-Max</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">SD</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">เชื่อถือได้</th>
-                    <th className="px-4 py-3 text-center text-sm font-medium text-purple-300">คะแนนสิ้นสุด</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-purple-300">คะแนนรูบริค</th>
                     {qaByOwner && <th className="px-4 py-3 text-center text-sm font-medium text-amber-400">ตอบคำถามท้ายคลิป (x/2)</th>}
                     <th className="px-4 py-3 text-center text-sm font-medium text-slate-400">สถานะ</th>
                   </tr>
@@ -2035,7 +2035,7 @@ function FlagTooltip({ flags }) {
   );
 }
 
-// ClipScoreModal - ให้ TA ดูคะแนนผู้รีวิว + ใส่คะแนนคลิป (คะแนนสิ้นสุด)
+// ClipScoreModal - ให้ TA ดูคะแนนผู้รีวิว + ใส่คะแนนคลิป (คะแนนรูบริค)
 function ClipScoreModal({ student, maxScore, canEdit, info, reviewerScores, currentTa, clipLink, onSave, onClose }) {
   const [val, setVal] = useState(currentTa?.taScore != null ? String(currentTa.taScore) : '');
   const [note, setNote] = useState(currentTa?.note || '');
@@ -2060,7 +2060,7 @@ function ClipScoreModal({ student, maxScore, canEdit, info, reviewerScores, curr
         <div className="overflow-y-auto p-5 space-y-4">
           {/* สถานะ */}
           <div className="bg-slate-800/50 rounded-lg p-3 text-sm flex flex-wrap gap-x-4 gap-y-1">
-            <span>คะแนนสิ้นสุด: <span className={`font-semibold ${info.final == null ? 'text-red-400' : info.status === 'auto' ? 'text-green-400' : 'text-purple-300'}`}>{info.final == null ? 'รอ TA' : `${info.final}/${maxScore}`}</span></span>
+            <span>คะแนนรูบริค: <span className={`font-semibold ${info.final == null ? 'text-red-400' : info.status === 'auto' ? 'text-green-400' : 'text-purple-300'}`}>{info.final == null ? 'รอ TA' : `${info.final}/${maxScore}`}</span></span>
             <span className="text-slate-400">รีวิว {reviewerScores.length} คน</span>
             {info.status === 'auto' && <span className="text-green-400 text-xs">สอดคล้อง → ใช้ Max อัตโนมัติ</span>}
             {info.needsTA && <span className="text-amber-300 text-xs">ต้องให้ TA ตรวจ (คะแนนกระจาย/รีวิวไม่ครบ 3)</span>}
@@ -2089,7 +2089,7 @@ function ClipScoreModal({ student, maxScore, canEdit, info, reviewerScores, curr
           {/* ช่องกรอกคะแนน TA */}
           {canEdit ? (
             <div className="space-y-2">
-              <label className="block text-sm text-slate-300">คะแนนของ TA (0–{maxScore}) — ใช้เป็นคะแนนสิ้นสุด</label>
+              <label className="block text-sm text-slate-300">คะแนนของ TA (0–{maxScore}) — ใช้เป็นคะแนนรูบริค</label>
               <input
                 type="number" min="0" max={maxScore} step="0.5" value={val}
                 onChange={(e) => setVal(e.target.value)}
