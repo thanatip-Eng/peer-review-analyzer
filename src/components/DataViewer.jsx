@@ -1119,6 +1119,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                             reviews={(reviewsByClip && reviewsByClip[student.studentId]) || []}
                             ownerSheetUrl={semesterMeta?.qaOwnerSheetUrl || ''}
                             ownerId={student.studentId}
+                            ownerName={student.fullName}
                           />
                         </td>
                       )}
@@ -1872,19 +1873,18 @@ function QADetailModal({ detail, threshold, canEdit, qaOverrides = {}, reviewEff
   );
 }
 
-// OwnerQATooltip - คะแนน "ตอบคำถามท้ายคลิป" ของเจ้าของ + hover ดูคำถาม/ผู้รีวิว
-function OwnerQATooltip({ qa, reviews, ownerSheetUrl, ownerId }) {
+// OwnerQATooltip - คะแนน "ตอบคำถามท้ายคลิป" ของเจ้าของ (กดเปิด modal ดูคำถาม/ผู้รีวิว)
+function OwnerQATooltip({ qa, reviews, ownerSheetUrl, ownerId, ownerName }) {
   const [open, setOpen] = useState(false);
   const score = qa ? qa.score : 0;
   const scoreColor = !qa ? 'text-red-400' : score >= 2 ? 'text-green-400' : score === 1 ? 'text-amber-400' : 'text-red-400';
 
   return (
-    <div className="relative inline-block">
+    <>
       <button
-        onMouseEnter={() => setOpen(true)}
-        onMouseLeave={() => setOpen(false)}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpen(true)}
         className="px-2 py-1 rounded-lg hover:bg-white/10 transition"
+        title="กดดูรายละเอียด"
       >
         {qa ? (
           <span className={`font-semibold ${scoreColor}`}>{score}/2</span>
@@ -1894,63 +1894,81 @@ function OwnerQATooltip({ qa, reviews, ownerSheetUrl, ownerId }) {
       </button>
 
       {open && (
-        <div className="absolute z-50 right-0 top-full mt-1 w-80 bg-slate-900 border border-white/20 rounded-xl shadow-xl p-3 space-y-2 text-left">
-          {/* คะแนนแยก */}
-          <div className="flex flex-wrap gap-2 text-xs">
-            <span className={`px-2 py-0.5 rounded ${qa?.posed ? 'bg-green-900/40 text-green-300' : 'bg-slate-700 text-slate-400'}`}>
-              {qa?.posed ? '✓' : '✗'} ตั้งคำถาม
-            </span>
-            <span className={`px-2 py-0.5 rounded ${qa?.answered ? 'bg-green-900/40 text-green-300' : 'bg-red-900/40 text-red-300'}`}>
-              {qa?.answered ? '✓ ตอบเอง' : 'ไม่ตอบ'}
-            </span>
-          </div>
-
-          {/* คำถามท้ายคลิป */}
-          <div>
-            <div className="text-xs text-slate-500 mb-0.5 flex items-center justify-between gap-2">
-              <span>คำถามท้ายคลิป (เจ้าของระบุ)</span>
-              {ownerSheetUrl ? (
-                <a href={ownerSheetUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300 shrink-0">
-                  <ExternalLink className="w-3 h-3" /> เปิดชีต (ค้น {ownerId})
-                </a>
-              ) : (
-                qa?.rowNumber != null && <span className="text-slate-500 shrink-0">ไฟล์เจ้าของ แถวที่ {qa.rowNumber}</span>
-              )}
-            </div>
-            <div className="text-xs text-slate-200 whitespace-pre-wrap break-words">
-              {qa?.question || <span className="text-slate-500 italic">— ไม่ได้ตั้งคำถาม / ไม่ส่งฟอร์ม —</span>}
-            </div>
-          </div>
-
-          {/* คำตอบเจ้าของ */}
-          {qa && (
-            <div>
-              <div className="text-xs text-slate-500 mb-0.5">คำตอบของเจ้าของ</div>
-              <div className="text-xs text-slate-200 whitespace-pre-wrap break-words">
-                {qa.answered ? qa.ownAnswer : <span className="text-red-300 italic">ไม่ตอบ</span>}
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" onClick={() => setOpen(false)}>
+          <div className="bg-slate-900 border border-white/15 rounded-2xl w-full max-w-md max-h-[85vh] flex flex-col shadow-2xl text-left" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-start justify-between p-4 border-b border-white/10">
+              <div>
+                <h3 className="font-semibold">ตอบคำถามท้ายคลิป</h3>
+                <div className="text-sm text-slate-400 mt-0.5">{ownerName || ownerId} · <span className="font-mono">{ownerId}</span></div>
+                <div className="flex flex-wrap gap-2 text-xs mt-2">
+                  <span className={`px-2 py-0.5 rounded ${qa?.posed ? 'bg-green-900/40 text-green-300' : 'bg-slate-700 text-slate-400'}`}>
+                    {qa?.posed ? '✓' : '✗'} ตั้งคำถาม
+                  </span>
+                  <span className={`px-2 py-0.5 rounded ${qa?.answered ? 'bg-green-900/40 text-green-300' : 'bg-red-900/40 text-red-300'}`}>
+                    {qa?.answered ? '✓ ตอบเอง' : 'ไม่ตอบ'}
+                  </span>
+                  <span className={`px-2 py-0.5 rounded ${scoreColor} bg-slate-800`}>รวม {score}/2</span>
+                </div>
               </div>
+              <button onClick={() => setOpen(false)} className="p-1.5 hover:bg-white/10 rounded-lg text-slate-400 hover:text-white"><X className="w-5 h-5" /></button>
             </div>
-          )}
 
-          {/* ผู้รีวิว */}
-          <div>
-            <div className="text-xs text-slate-500 mb-1">ผู้รีวิวคลิปนี้ ({reviews.length} คน)</div>
-            {reviews.length === 0 ? (
-              <div className="text-xs text-slate-500 italic">ยังไม่มีผู้รีวิว</div>
-            ) : (
-              <div className="space-y-1 max-h-40 overflow-y-auto">
-                {reviews.map((r, i) => (
-                  <div key={i} className="text-xs bg-slate-800/60 rounded p-1.5">
-                    <div className="text-slate-300">{r.reviewerName || '(ไม่ทราบชื่อ)'}</div>
-                    <div className="text-slate-400">ถอดคำถาม: {r.transcribedQ || <span className="italic text-slate-500">— ว่าง —</span>}</div>
+            {/* Body */}
+            <div className="overflow-y-auto p-4 space-y-3">
+              {/* คำถามท้ายคลิป */}
+              <div>
+                <div className="text-xs text-slate-500 mb-0.5 flex items-center justify-between gap-2">
+                  <span>คำถามท้ายคลิป (เจ้าของระบุ)</span>
+                  {ownerSheetUrl ? (
+                    <a href={ownerSheetUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-cyan-400 hover:text-cyan-300 shrink-0">
+                      <ExternalLink className="w-3 h-3" /> เปิดชีต (ค้น {ownerId})
+                    </a>
+                  ) : (
+                    qa?.rowNumber != null && <span className="text-slate-500 shrink-0">ไฟล์เจ้าของ แถวที่ {qa.rowNumber}</span>
+                  )}
+                </div>
+                <div className="text-sm text-slate-200 whitespace-pre-wrap break-words bg-slate-800/40 rounded-lg p-2">
+                  {qa?.question || <span className="text-slate-500 italic">— ไม่ได้ตั้งคำถาม / ไม่ส่งฟอร์ม —</span>}
+                </div>
+              </div>
+
+              {/* คำตอบเจ้าของ */}
+              {qa && (
+                <div>
+                  <div className="text-xs text-slate-500 mb-0.5">คำตอบของเจ้าของ</div>
+                  <div className="text-sm text-slate-200 whitespace-pre-wrap break-words bg-slate-800/40 rounded-lg p-2">
+                    {qa.answered ? qa.ownAnswer : <span className="text-red-300 italic">ไม่ตอบ</span>}
                   </div>
-                ))}
+                </div>
+              )}
+
+              {/* ผู้รีวิว */}
+              <div>
+                <div className="text-xs text-slate-500 mb-1">ผู้รีวิวคลิปนี้ ({reviews.length} คน)</div>
+                {reviews.length === 0 ? (
+                  <div className="text-xs text-slate-500 italic">ยังไม่มีผู้รีวิว</div>
+                ) : (
+                  <div className="space-y-1">
+                    {reviews.map((r, i) => (
+                      <div key={i} className="text-xs bg-slate-800/60 rounded p-2">
+                        <div className="text-slate-300">{r.reviewerName || '(ไม่ทราบชื่อ)'}</div>
+                        <div className="text-slate-400">ถอดคำถาม: {r.transcribedQ || <span className="italic text-slate-500">— ว่าง —</span>}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-3 border-t border-white/10 flex justify-end">
+              <button onClick={() => setOpen(false)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm">ปิด</button>
+            </div>
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
 
