@@ -430,9 +430,6 @@ export function buildAnalysis(reviewRows, options = {}) {
     if (grader.completedReviews === 0 && grader.assignedReviews > 0) {
       grader.flags.push({ type: 'no_review_done', message: `ได้รับ ${grader.assignedReviews} งานแต่ยังไม่รีวิวเลย`, severity: 'alert' });
     }
-    if (reviewedAll && !allComplete) {
-      grader.flags.push({ type: 'incomplete_comments', message: `รีวิวครบแต่คอมเมนต์ไม่สมบูรณ์ (${completeCount}/${reviewedCount} งานสมบูรณ์) - ไม่ได้โบนัส`, severity: 'warning' });
-    }
     if (!reviewedAll && grader.assignedReviews > 0) {
       grader.flags.push({ type: 'incomplete_review', message: `รีวิวไม่ครบ (${reviewedCount}/${grader.assignedReviews} งาน)`, severity: 'warning' });
     }

@@ -76,6 +76,7 @@ export default function AdminPanel({ onViewData }) {
   const [qaProcessing, setQaProcessing] = useState('');     // '' | 'process' | 'save'
   const [qaPreview, setQaPreview] = useState(null);         // ผลจาก computeQA ก่อนบันทึก
   const [qaSheetUrls, setQaSheetUrls] = useState({ owner: '', reviewer: '' }); // ลิงก์ Excel Online ต้นทาง
+  const [workMaxScoreInput, setWorkMaxScoreInput] = useState(''); // คะแนนเต็มชิ้นงาน (rubric) สำหรับ TA
   const [qaSheetSaving, setQaSheetSaving] = useState(false);
 
   // Confirm modal state
@@ -177,28 +178,32 @@ export default function AdminPanel({ onViewData }) {
 
   // โหลดลิงก์ Excel Online ของรายการที่เลือก (ไว้ prefill)
   useEffect(() => {
-    if (!selectedSemester) { setQaSheetUrls({ owner: '', reviewer: '' }); return; }
+    if (!selectedSemester) { setQaSheetUrls({ owner: '', reviewer: '' }); setWorkMaxScoreInput(''); return; }
     (async () => {
       try {
         const snap = await getDoc(doc(db, 'semesters', selectedSemester));
         const d = snap.exists() ? snap.data() : {};
         setQaSheetUrls({ owner: d.qaOwnerSheetUrl || '', reviewer: d.qaReviewerSheetUrl || '' });
-      } catch { setQaSheetUrls({ owner: '', reviewer: '' }); }
+        setWorkMaxScoreInput(d.workMaxScore != null ? String(d.workMaxScore) : '');
+      } catch { setQaSheetUrls({ owner: '', reviewer: '' }); setWorkMaxScoreInput(''); }
     })();
   }, [selectedSemester]);
 
-  // บันทึกลิงก์ Excel Online ลง semester doc
+  // บันทึกตั้งค่ารายการ (ลิงก์ Excel Online + คะแนนเต็มชิ้นงาน) ลง semester doc
   const handleSaveSheetUrls = async () => {
     if (!selectedSemester) return;
     setQaSheetSaving(true);
     try {
-      await setDoc(doc(db, 'semesters', selectedSemester), {
+      const payload = {
         qaOwnerSheetUrl: qaSheetUrls.owner.trim(),
         qaReviewerSheetUrl: qaSheetUrls.reviewer.trim(),
-      }, { merge: true });
-      setUploadSuccess('บันทึกลิงก์ Excel Online แล้ว');
+      };
+      const wm = Number(workMaxScoreInput);
+      if (workMaxScoreInput.trim() !== '' && wm > 0) payload.workMaxScore = wm;
+      await setDoc(doc(db, 'semesters', selectedSemester), payload, { merge: true });
+      setUploadSuccess('บันทึกตั้งค่ารายการแล้ว');
     } catch (err) {
-      setUploadError(`บันทึกลิงก์ไม่สำเร็จ: ${err.message}`);
+      setUploadError(`บันทึกไม่สำเร็จ: ${err.message}`);
     } finally {
       setQaSheetSaving(false);
     }
@@ -1329,8 +1334,15 @@ export default function AdminPanel({ onViewData }) {
                     </div>
                   )}
 
-                  {/* ลิงก์ Excel Online (ต้นทางจริง) ให้ TA เปิดตรวจ */}
+                  {/* ตั้งค่ารายการ: คะแนนเต็มชิ้นงาน + ลิงก์ Excel Online */}
                   <div className="mt-5 pt-4 border-t border-white/10">
+                    <p className="text-sm font-medium mb-1">ตั้งค่ารายการ (สำหรับ TA ตรวจ)</p>
+                    <div className="mb-3">
+                      <label className="block text-xs text-slate-400 mb-1">คะแนนเต็มชิ้นงาน (rubric) — เช่น 11 (คลิป 10 + รูบริคพิเศษ 1)</label>
+                      <input type="number" min="1" step="1" value={workMaxScoreInput} onChange={(e) => setWorkMaxScoreInput(e.target.value)}
+                        placeholder="เช่น 11" className="w-40 px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm" />
+                      <p className="text-xs text-slate-500 mt-1">ใช้เป็นคะแนนเต็มของ "คะแนนสิ้นสุด" ที่ TA ให้ และช่วงคะแนนในหน้าคะแนนชิ้นงาน (ว่าง = ใช้ค่าจาก Canvas)</p>
+                    </div>
                     <p className="text-sm font-medium mb-1">ลิงก์ Excel Online (ต้นทางจริง สำหรับ TA เปิดตรวจ)</p>
                     <p className="text-xs text-slate-500 mb-3">วางลิงก์ชีต Excel Online (SharePoint/OneDrive) — TA จะกดเปิดแล้วค้นด้วยอีเมลได้ · แนะนำตั้งการแชร์ให้เปิดได้ทั้งองค์กร</p>
                     <div className="space-y-2">
@@ -1346,7 +1358,7 @@ export default function AdminPanel({ onViewData }) {
                       </div>
                       <button onClick={handleSaveSheetUrls} disabled={qaSheetSaving}
                         className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
-                        <Save className="w-4 h-4" /> {qaSheetSaving ? 'กำลังบันทึก...' : 'บันทึกลิงก์'}
+                        <Save className="w-4 h-4" /> {qaSheetSaving ? 'กำลังบันทึก...' : 'บันทึกตั้งค่า'}
                       </button>
                     </div>
                   </div>

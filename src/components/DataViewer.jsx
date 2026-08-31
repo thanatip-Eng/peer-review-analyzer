@@ -122,7 +122,12 @@ export default function DataViewer({ semesterId, taAssignment }) {
             reviews = [...reviews, ...docData.data];
           }
         });
-        
+
+        // ตัด flag เก่าที่เลิกใช้แล้วออก (incomplete_comments / เกี่ยวกับโบนัส) จากข้อมูลที่บันทึกไว้
+        Object.values(graders).forEach((g) => {
+          if (Array.isArray(g.flags)) g.flags = g.flags.filter((f) => f.type !== 'incomplete_comments');
+        });
+
         setData({
           students,
           graders,
@@ -745,6 +750,9 @@ export default function DataViewer({ semesterId, taAssignment }) {
     return 'text-red-400';
   };
 
+  // คะแนนเต็มชิ้นงาน (rubric) — admin ตั้งได้ต่อรายการ (semesterMeta.workMaxScore) ไม่งั้นใช้ค่าจาก Canvas
+  const workMax = Number(semesterMeta?.workMaxScore) > 0 ? Number(semesterMeta.workMaxScore) : (data?.stats?.maxScore || 12);
+
   return (
     <div className="space-y-6">
       {/* Group Filter Bar */}
@@ -865,7 +873,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                         <td className="px-4 py-3 font-medium">{group}</td>
                         <td className="px-4 py-3 text-center text-slate-400">{stats.students.length}</td>
                         <td className="px-4 py-3 text-center">
-                          <span className={`font-semibold ${getScoreColor(stats.avgWorkScore, data?.stats?.maxScore || 12)}`}>
+                          <span className={`font-semibold ${getScoreColor(stats.avgWorkScore, workMax)}`}>
                             {stats.avgWorkScore.toFixed(2)}
                           </span>
                         </td>
@@ -1009,10 +1017,10 @@ export default function DataViewer({ semesterId, taAssignment }) {
           {/* Flag Legend */}
           <div className="bg-slate-800/50 rounded-xl p-3 text-xs flex flex-wrap gap-x-6 gap-y-2">
             <span className="text-slate-400 font-medium">ความหมาย Flag:</span>
-            <span><span className="text-red-400">🔴</span> คะแนนเกิน/ต่ำกว่าช่วง (0-{data?.stats?.maxScore || 12})</span>
+            <span><span className="text-red-400">🔴</span> คะแนนเกิน/ต่ำกว่าช่วง (0-{workMax})</span>
             <span><span className="text-yellow-400">🟡</span> SD สูง / คะแนนห่างกันมาก</span>
             <span><span className="text-blue-400">🔵</span> grader น้อยกว่า 2 คน</span>
-            <span><span className="text-green-400">✓</span> น่าเชื่อถือ = grader≥2, SD&lt;3, คะแนนในช่วง 0-{data?.stats?.maxScore || 12}</span>
+            <span><span className="text-green-400">✓</span> น่าเชื่อถือ = grader≥2, SD&lt;3, คะแนนในช่วง 0-{workMax}</span>
           </div>
 
           <div className="bg-slate-900/50 border border-white/10 rounded-2xl overflow-hidden">
@@ -1064,7 +1072,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                           <span className="text-slate-500">/{student.gradersAssigned}</span>
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <span className={`font-semibold ${getScoreColor(student.workScore.average, data?.stats?.maxScore || 12)}`}>
+                        <span className={`font-semibold ${getScoreColor(student.workScore.average, workMax)}`}>
                           {student.workScore.average || '-'}
                         </span>
                       </td>
@@ -1084,7 +1092,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
                       </td>
                       {(() => {
                         const cf = clipFinal(student);
-                        const maxSc = data?.stats?.maxScore || 12;
+                        const maxSc = workMax;
                         if (cf.status === 'pending') {
                           return (
                             <td className="px-4 py-3 text-center">
@@ -1582,7 +1590,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
       {clipModal && (
         <ClipScoreModal
           student={clipModal.student}
-          maxScore={data?.stats?.maxScore || 12}
+          maxScore={workMax}
           canEdit={isAdmin || isTA}
           info={clipFinal(clipModal.student)}
           reviewerScores={reviewerScoresFor(clipModal.student)}
@@ -1598,7 +1606,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
         <CanvasExportModal
           semesterId={semesterId}
           semesterMeta={semesterMeta}
-          maxScore={data?.stats?.maxScore || 12}
+          maxScore={workMax}
           people={exportPeople}
           onClose={() => setCanvasExportOpen(false)}
         />
