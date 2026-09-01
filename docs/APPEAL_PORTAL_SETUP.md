@@ -32,24 +32,26 @@ Settings → Environment Variables (แล้ว **Redeploy**):
 ## 3) Publish Firestore Security Rules
 ใช้ rules ล่าสุดใน `FIREBASE_SETUP.md` (มี match สำหรับ `appeals`, `appealAllowlist`, `ltiNonces` แล้ว) → Publish
 
-## 4) เพิ่ม External App (LTI 1.1) ใน Canvas course
+## 4) เพิ่ม External App (LTI 1.1) ใน Canvas course — วิธี **By URL** (ได้เมนู Course Navigation)
+> ⚠️ **Manual Entry ตั้ง placement course_navigation ไม่ได้** — ต้องใช้ XML config
+> แอปมี endpoint `/api/lti-config` ที่คืน XML ให้แล้ว (ประกาศ course_navigation + privacy public + เปิดแท็บใหม่)
+
 Canvas → คอร์ส → **Settings → Apps → View App Configurations → + App**
-- **Configuration Type:** `Manual Entry`
+- **Configuration Type:** `By URL`
 - **Name:** เช่น `ตรวจสอบผลอุทธรณ์คะแนน`
 - **Consumer Key:** = `LTI_KEY`
 - **Shared Secret:** = `LTI_SECRET`
-- **Launch URL:** = `LTI_LAUNCH_URL` (เช่น `https://<โดเมน>/api/lti-launch`)
-- **Privacy:** เลือก **Public** (ไม่งั้น Canvas ไม่ส่งอีเมล → ระบบยืนยันตัวตนไม่ได้)
-- (ถ้ามีช่อง Custom Fields) ใส่ `custom_semester=<semesterId>` เพื่อระบุเทอม ไม่ใส่ก็ได้ (ระบบใช้เทอมล่าสุด)
+- **Config URL:** = `https://<โดเมนจริง>/api/lti-config`
+- **Submit** → Canvas จะดึง XML แล้วสร้างเมนูใน **Course Navigation** ให้อัตโนมัติ (เปิดแท็บใหม่ · privacy public เพื่อส่งอีเมล)
 
-### ให้เปิดในแท็บใหม่ (กัน third-party cookie ใน iframe)
-- ถ้าตั้งค่าผ่าน XML/placement ได้ ให้ตั้ง placement เป็น **open in new tab**
-- วิธีที่ชัวร์สุด: วางเป็น **Module item (External Tool)** แล้วติ๊ก **"Load in a new tab"**
+**ทางเลือกสำรอง (Paste XML):** เปิด `https://<โดเมน>/api/lti-config` คัดลอก XML ทั้งหมด แล้วเลือก Configuration Type = `Paste XML` วางลงไป (Key/Secret ใส่เหมือนเดิม)
+
+> ระบุเทอม: ถ้าต้องการล็อกเทอม ใส่ custom field `custom_semester=<semesterId>` เพิ่มได้ (ไม่ใส่ = ระบบใช้เทอมล่าสุด)
 
 ## 5) วางลิงก์ให้ นศ. เข้าถึง
-- เพิ่มเป็น **Module item → External Tool** เลือกเครื่องมือนี้ (แนะนำ "Load in a new tab")
-- หรือเปิดใน **Course Navigation**
-- ในคำอธิบาย assignment ใส่ได้แค่ **ลิงก์/ข้อความชี้ไป module item** — **ฝัง iframe ตัวแอปสดในคำอธิบายไม่ได้** (Canvas ตัด script/iframe + เป็น GET ไม่มี launch ที่เซ็น = ไม่ผ่าน auth)
+- **Course Navigation** จะมีเมนูให้อัตโนมัติจากขั้นตอนข้อ 4 (เปิดแท็บใหม่) — เป็นวิธีหลัก
+- หรือเพิ่มเป็น **Module item → External Tool** เลือกเครื่องมือนี้ (ติ๊ก "Load in a new tab") ก็ได้
+- ในคำอธิบาย assignment ใส่ได้แค่ **ลิงก์/ข้อความชี้ไปเมนู/module item** — **ฝัง iframe ตัวแอปสดในคำอธิบายไม่ได้** (Canvas ตัด script/iframe + เป็น GET ไม่มี launch ที่เซ็น = ไม่ผ่าน auth)
 
 ---
 
