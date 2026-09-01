@@ -30,8 +30,9 @@ function parseAppeals(rows) {
     if (!row) continue;
     const email = String((emailIdx >= 0 ? row[emailIdx] : '') || '').trim().toLowerCase();
     if (!email) continue;
+    // key = prefix อีเมล (รองรับทั้งอีเมลตัวเลขและอีเมลชื่อ เช่น thanatip.ch@cmu.ac.th)
+    // การส่งฟีดแบคเข้า Canvas match ด้วย "อีเมลเต็ม" อยู่แล้ว จึงไม่บังคับรูปแบบรหัส
     const sisId = email.split('@')[0];
-    if (!/^\d{9,10}$/.test(sisId)) continue;
     const name = String((nameIdx >= 0 ? row[nameIdx] : '') || '').trim();
     const parts = [];
     hdr.forEach((h, i) => {
