@@ -96,7 +96,8 @@ export default function AppealManager({ semesterId }) {
 
   const saveTest = async (nextMode) => {
     const mode = nextMode == null ? testMode : nextMode;
-    const list = testListText.split(/[\s,]+/).map((x) => x.trim()).filter((x) => /^\d{6,10}$/.test(x));
+    // รับรหัสทุกรูปแบบที่ Canvas ส่งมา (ไม่บังคับว่าต้องเป็นตัวเลขล้วน) + ตัดซ้ำ
+    const list = [...new Set(testListText.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean))];
     setTestMode(mode); setTestSaving(true);
     try {
       await setDoc(doc(db, 'semesters', semesterId, 'portalConfig', 'info'), {

@@ -107,7 +107,7 @@ export default function StudentPortal() {
         <div className="max-w-3xl mx-auto px-4 py-4 flex items-center justify-between gap-4">
           <div>
             <h1 className="text-xl font-bold">คะแนนและการขอตรวจสอบ</h1>
-            <p className="text-slate-400 text-sm">{userData?.email || sisId}</p>
+            <p className="text-slate-400 text-sm">{userData?.email || ''}<span className="text-slate-500"> · รหัส {sisId}</span></p>
           </div>
           <button onClick={() => logout()} className="p-2 text-slate-400 hover:text-white hover:bg-white/10 rounded-lg transition" title="ออกจากระบบ">
             <LogOut className="w-5 h-5" />
