@@ -17,7 +17,9 @@ export default function handler(req, res) {
     return res.send('LTI_LAUNCH_URL env is not set');
   }
   const url = esc(launchUrl);
-  const title = 'ตรวจสอบผลอุทธรณ์คะแนน';
+  // ชื่อเมนู/แอป — ตั้งเองได้ผ่าน query param ?label=... (ไม่ใส่ = ค่าเริ่มต้น)
+  const rawLabel = typeof req.query?.label === 'string' && req.query.label.trim() ? req.query.label : 'ตรวจสอบผลอุทธรณ์คะแนน';
+  const title = rawLabel;
 
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <cartridge_basiclti_link xmlns="http://www.imsglobal.org/xsd/imslticc_v1p0"
