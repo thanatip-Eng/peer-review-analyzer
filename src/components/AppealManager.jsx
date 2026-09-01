@@ -190,7 +190,7 @@ export default function AppealManager({ semesterId }) {
                 <span className="flex items-center gap-2 text-sm">
                   {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                   <span className="font-mono text-cyan-400">{a.id}</span>
-                  <span className="text-slate-300">{a.name}</span>
+                  <span className="text-slate-300">{a.name || a.email || ''}</span>
                 </span>
                 <span className={`text-xs px-2 py-0.5 rounded-full ${a.status === 'resolved' ? 'bg-green-900/40 text-green-300' : a.status === 'in_review' ? 'bg-amber-900/40 text-amber-300' : 'bg-blue-900/40 text-blue-300'}`}>{stLabel}</span>
               </button>
@@ -198,7 +198,13 @@ export default function AppealManager({ semesterId }) {
                 <div className="px-3 pb-3 space-y-3 border-t border-white/5 pt-3">
                   {/* คำร้อง */}
                   {(a.submissions || []).map((s, i) => (
-                    <div key={i} className="bg-slate-900/60 rounded p-2 text-xs text-slate-300 whitespace-pre-wrap">{s.text || '—'}</div>
+                    <div key={i} className="bg-slate-900/60 rounded p-2 text-xs text-slate-300">
+                      <div className="mb-1 flex items-center gap-2 text-slate-500">
+                        {s.category && <span className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-300">{s.category}</span>}
+                        <span>{s.source === 'portal' ? 'ยื่นในพอร์ทัล' : 'MS Form'}</span>
+                      </div>
+                      <div className="whitespace-pre-wrap">{s.text || '—'}</div>
+                    </div>
                   ))}
                   {/* checklist */}
                   {templates.length > 0 && (

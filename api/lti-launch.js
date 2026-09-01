@@ -121,21 +121,13 @@ export default async function handler(req, res) {
       return denyPage(res, 403, `อีเมล ${email} ไม่ใช่รูปแบบอีเมลนักศึกษา (รหัส@cmu.ac.th)`);
     }
 
-    // 6) allowlist (authoritative): อนุญาตถ้ามีคำร้องอุทธรณ์ หรือมีใน allowlist ของเทอมนั้น
+    // 6) allowlist: การ launch ผ่าน LTI สำเร็จ = Canvas ยืนยันว่าเป็นสมาชิกคอร์สนี้แล้ว
+    // (Canvas ยิง launch ให้เฉพาะคนในคอร์ส) + อีเมลเป็นรูปแบบรหัส นศ. -> อนุญาตให้เข้ายื่น/ดูคำร้อง
+    // ถ้ามี denylist ในอนาคตค่อยเสริม; ตอนนี้ enrollment คือด่านหลัก
     const semesterId = params.custom_semester || (await latestSemesterId(db));
     if (!semesterId) return denyPage(res, 500, 'ยังไม่มีข้อมูลเทอมในระบบ');
-    const semRef = db.collection('semesters').doc(semesterId);
-    const [appealSnap, allowSnap] = await Promise.all([
-      semRef.collection('appeals').doc(sisId).get(),
-      semRef.collection('appealAllowlist').doc(sisId).get(),
-    ]);
-    if (!appealSnap.exists && !allowSnap.exists) {
-      return denyPage(
-        res,
-        403,
-        `ไม่พบสิทธิ์เข้าถึงสำหรับ ${email}<br>ถ้าคุณยื่นอุทธรณ์แล้วแต่ยังเข้าไม่ได้ กรุณารอเจ้าหน้าที่บันทึกคำร้อง หรือติดต่ออาจารย์`,
-      );
-    }
+    const denySnap = await db.collection('semesters').doc(semesterId).collection('appealDenylist').doc(sisId).get();
+    if (denySnap.exists) return denyPage(res, 403, `บัญชี ${email} ถูกระงับการเข้าถึง — ติดต่ออาจารย์`);
 
     // 7) mint custom token (uid = รหัส นศ., claim role=student)
     const token = await adminAuth().createCustomToken(sisId, {

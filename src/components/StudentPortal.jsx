@@ -4,10 +4,12 @@
 // ของการอุทธรณ์คะแนน แสดงเฉพาะข้อมูลของ uid (รหัส นศ.) ตัวเอง (Firestore rules บังคับ)
 // -----------------------------------------------------------------------------
 import React, { useEffect, useState } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { LogOut, CheckCircle2, Clock, Search, FileText, MessageSquare } from 'lucide-react';
+import { LogOut, CheckCircle2, Clock, Search, FileText, MessageSquare, Send, Plus } from 'lucide-react';
+
+const CATEGORIES = ['คะแนนคลิป', 'คะแนนตอบคำถามท้ายคลิป', 'คะแนน peer review', 'อื่น ๆ'];
 
 const STATUS = {
   received: { label: 'รับเรื่องแล้ว', cls: 'bg-blue-500/20 text-blue-300 border-blue-500/30', icon: Clock },
@@ -21,6 +23,10 @@ export default function StudentPortal() {
   const semesterId = userData?.semesterId;
   const [appeal, setAppeal] = useState(undefined); // undefined = loading, null = ไม่มีคำร้อง
   const [error, setError] = useState('');
+  const [category, setCategory] = useState('');
+  const [detail, setDetail] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [showForm, setShowForm] = useState(false);
 
   useEffect(() => {
     if (!sisId || !semesterId) { setAppeal(null); return; }
@@ -36,11 +42,50 @@ export default function StudentPortal() {
   const st = STATUS[appeal?.status] || STATUS.received;
   const StatusIcon = st.icon;
 
+  const formCard = (
+    <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-5">
+      <div className="text-sm text-slate-200 mb-3 font-medium">ยื่นคำร้องขอตรวจสอบคะแนน</div>
+      <label className="block text-xs text-slate-400 mb-1">ส่วนที่ต้องการให้ตรวจสอบ</label>
+      <select value={category} onChange={(e) => setCategory(e.target.value)}
+        className="w-full mb-3 px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-sm">
+        <option value="">— เลือก —</option>
+        {CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+      </select>
+      <label className="block text-xs text-slate-400 mb-1">รายละเอียด / เหตุผล</label>
+      <textarea value={detail} onChange={(e) => setDetail(e.target.value)} rows={4}
+        placeholder="อธิบายว่าต้องการให้ตรวจสอบอะไร เพราะอะไร..."
+        className="w-full px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-white text-sm" />
+      <button onClick={submit} disabled={submitting || !detail.trim()}
+        className="mt-3 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm font-medium flex items-center gap-2 disabled:opacity-50">
+        <Send className="w-4 h-4" /> {submitting ? 'กำลังส่ง...' : 'ส่งคำร้อง'}
+      </button>
+    </div>
+  );
+
   const fmt = (ts) => {
     try {
       const d = ts?.toDate ? ts.toDate() : ts ? new Date(ts) : null;
       return d ? d.toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' }) : '';
     } catch { return ''; }
+  };
+
+  // ยื่นคำร้องในพอร์ทัล — เขียนลง appeals/{sisId} เอง (rules อนุญาตเฉพาะ submissions ของตัวเอง)
+  const submit = async () => {
+    if (!detail.trim() || !sisId || !semesterId || appeal === undefined) return;
+    setSubmitting(true); setError('');
+    try {
+      const ref = doc(db, 'semesters', semesterId, 'appeals', sisId);
+      const newSub = { text: detail.trim(), category: category || 'อื่น ๆ', ts: new Date(), source: 'portal' };
+      const payload = appeal
+        ? { submissions: [...(appeal.submissions || []), newSub], updatedAt: serverTimestamp() }
+        : { sisId, email: userData?.email || '', submissions: [newSub], status: 'received', createdAt: serverTimestamp(), updatedAt: serverTimestamp() };
+      await setDoc(ref, payload, { merge: true });
+      setDetail(''); setCategory(''); setShowForm(false);
+    } catch (e) {
+      console.error(e); setError('ส่งคำร้องไม่สำเร็จ: ' + (e.message || e));
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -73,16 +118,18 @@ export default function StudentPortal() {
         )}
 
         {appeal === null && !error && (
-          <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-8 text-center">
-            <div className="w-16 h-16 bg-slate-800 rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <FileText className="w-8 h-8 text-slate-500" />
+          <>
+            <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-6 text-center">
+              <div className="w-14 h-14 bg-slate-800 rounded-2xl flex items-center justify-center mx-auto mb-3">
+                <FileText className="w-7 h-7 text-slate-500" />
+              </div>
+              <p className="text-slate-400 text-sm">
+                ยังไม่มีคำร้องอุทธรณ์คะแนนของคุณ — ยื่นคำร้องได้ด้านล่าง<br />
+                (ถ้าเพิ่งยื่นผ่านแบบฟอร์ม MS Form กรุณารอเจ้าหน้าที่บันทึก แล้วกลับมาดูอีกครั้ง)
+              </p>
             </div>
-            <h2 className="text-lg font-semibold mb-2">ยังไม่มีการยื่นอุทธรณ์</h2>
-            <p className="text-slate-400 text-sm">
-              ระบบยังไม่พบคำร้องอุทธรณ์คะแนนของคุณ<br />
-              ถ้าเพิ่งยื่นแบบฟอร์ม กรุณารอเจ้าหน้าที่บันทึกคำร้อง แล้วกลับมาดูอีกครั้ง
-            </p>
-          </div>
+            {formCard}
+          </>
         )}
 
         {appeal && (
@@ -131,12 +178,23 @@ export default function StudentPortal() {
                 <div className="space-y-3">
                   {appeal.submissions.map((s, i) => (
                     <div key={i} className="bg-slate-800/50 rounded-lg p-3">
-                      {s.ts && <div className="text-xs text-slate-500 mb-1">{fmt(s.ts)}</div>}
+                      <div className="text-xs text-slate-500 mb-1 flex items-center gap-2">
+                        {s.category && <span className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-300">{s.category}</span>}
+                        {s.ts && <span>{fmt(s.ts)}</span>}
+                      </div>
                       <p className="text-sm text-slate-300 whitespace-pre-wrap">{s.text || '—'}</p>
                     </div>
                   ))}
                 </div>
               </div>
+            )}
+
+            {/* ยื่นคำร้องเพิ่ม */}
+            {showForm ? formCard : (
+              <button onClick={() => setShowForm(true)}
+                className="inline-flex items-center gap-2 text-sm text-cyan-400 hover:text-cyan-300">
+                <Plus className="w-4 h-4" /> ยื่นคำร้องเพิ่ม
+              </button>
             )}
           </>
         )}

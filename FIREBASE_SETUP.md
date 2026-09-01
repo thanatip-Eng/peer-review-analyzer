@@ -186,10 +186,19 @@ service cloud.firestore {
       match /appeals/{sisId} {
         allow read: if isLoggedIn() && (request.auth.uid == sisId || isAdmin() || isTA());
         allow write: if isAdmin() || isTA();
+        // นักศึกษายื่นคำร้องของตัวเองได้ (สร้าง doc ใหม่สถานะ received)
+        allow create: if isLoggedIn() && request.auth.uid == sisId
+          && request.resource.data.sisId == sisId
+          && request.resource.data.status == 'received'
+          && request.resource.data.keys().hasOnly(['sisId','email','name','submissions','status','createdAt','updatedAt']);
+        // แก้ได้เฉพาะ submissions (ห้ามแตะ reply/status/checklist ของเจ้าหน้าที่)
+        allow update: if isLoggedIn() && request.auth.uid == sisId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['submissions','updatedAt']);
       }
 
       // Sub-collection: appealAllowlist (รายชื่ออีเมล/รหัสที่อนุญาตพิเศษ — จัดการฝั่ง server/console)
-      match /appealAllowlist/{docId} {
+      // appealDenylist: รหัสที่ถูกระงับการเข้าพอร์ทัล (จัดการฝั่ง server/console; Admin SDK ข้าม rules)
+      match /appealDenylist/{docId} {
         allow read: if isLoggedIn() && (isAdmin() || isTA());
         allow write: if isAdmin();
       }
