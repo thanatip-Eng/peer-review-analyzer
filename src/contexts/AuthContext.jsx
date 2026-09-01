@@ -142,12 +142,26 @@ export function AuthProvider({ children }) {
     }
   }
 
-  // Fetch user data from Firestore
-  async function fetchUserData(uid) {
+  // Fetch user role/data. นักศึกษาที่เข้าผ่าน Canvas LTI จะได้ custom token ที่มี
+  // claim role='student' (ไม่มี users/{uid} doc) — ตรวจ claim ก่อน แล้วค่อย fallback
+  // ไป Firestore สำหรับ admin/TA/pending (ล็อกอิน Google/email)
+  async function fetchUserData(user) {
     try {
-      const userRef = doc(db, 'users', uid);
+      const tokenResult = await user.getIdTokenResult();
+      if (tokenResult.claims && tokenResult.claims.role === 'student') {
+        const data = {
+          role: 'student',
+          sisId: user.uid,
+          email: tokenResult.claims.email || user.email || '',
+          semesterId: tokenResult.claims.semesterId || null,
+        };
+        setUserRole('student');
+        setUserData(data);
+        return data;
+      }
+
+      const userRef = doc(db, 'users', user.uid);
       const userSnap = await getDoc(userRef);
-      
       if (userSnap.exists()) {
         const data = userSnap.data();
         setUserRole(data.role);
@@ -170,9 +184,9 @@ export function AuthProvider({ children }) {
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setCurrentUser(user);
-      
+
       if (user) {
-        await fetchUserData(user.uid);
+        await fetchUserData(user);
       } else {
         setUserRole(null);
         setUserData(null);
@@ -196,6 +210,7 @@ export function AuthProvider({ children }) {
     fetchUserData,
     isAdmin: userRole === 'admin',
     isTA: userRole === 'ta',
+    isStudent: userRole === 'student',
     isPending: userRole === 'pending',
     isEmailAuth: userData?.authProvider === 'email'
   };

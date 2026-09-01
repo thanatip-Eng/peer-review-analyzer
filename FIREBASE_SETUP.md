@@ -180,11 +180,31 @@ service cloud.firestore {
         allow write: if isAdmin() || isTA();
       }
 
+      // Sub-collection: appeals (คำร้องอุทธรณ์คะแนน — key = รหัสนักศึกษา)
+      // นักศึกษา (login ผ่าน Canvas LTI, uid = รหัส นศ.) อ่านได้เฉพาะของตัวเอง
+      // เงื่อนไข uid == sisId อยู่หน้าสุด (OR short-circuit) จึงไม่ต้องเรียก isAdmin() สำหรับ นศ.
+      match /appeals/{sisId} {
+        allow read: if isLoggedIn() && (request.auth.uid == sisId || isAdmin() || isTA());
+        allow write: if isAdmin() || isTA();
+      }
+
+      // Sub-collection: appealAllowlist (รายชื่ออีเมล/รหัสที่อนุญาตพิเศษ — จัดการฝั่ง server/console)
+      match /appealAllowlist/{docId} {
+        allow read: if isLoggedIn() && (isAdmin() || isTA());
+        allow write: if isAdmin();
+      }
+
       // เผื่อ subcollection อื่น ๆ ในอนาคต: อ่านได้ (admin/ta), เขียนได้เฉพาะ admin
       match /{document=**} {
         allow read: if isLoggedIn() && (isAdmin() || isTA());
         allow write: if isAdmin();
       }
+    }
+
+    // Collection: ltiNonces (กัน replay ของ LTI launch — เขียน/อ่านโดย Firebase Admin SDK เท่านั้น)
+    // Admin SDK ข้าม security rules อยู่แล้ว จึงปิดฝั่ง client ทั้งหมด
+    match /ltiNonces/{nonce} {
+      allow read, write: if false;
     }
     
     // Collection: taAssignments

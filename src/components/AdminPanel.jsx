@@ -20,6 +20,7 @@ import { parseCSV } from '../utils/csvParser';
 import { fetchCourses, fetchAssignments, fetchPeerReviewData, DEFAULT_CANVAS_URL } from '../utils/canvasApi';
 import { rowsFromArrayBuffer, parseOwnerRows, parseReviewerRows, computeQA, QA_MATCH_THRESHOLD } from '../utils/qaMatcher';
 import ConfirmModal from './ConfirmModal';
+import AppealManager from './AppealManager';
 import Papa from 'papaparse';
 import { Upload, Users, UserPlus, Settings, Trash2, Edit, Save, X, ChevronRight, CheckCircle2, AlertTriangle, Eye, EyeOff, Mail, Lock, Key, Cloud, Download, RefreshCw, Clock, MessageSquare } from 'lucide-react';
 
@@ -1403,6 +1404,13 @@ export default function AdminPanel({ onViewData }) {
                       </button>
                     </div>
                   </div>
+                </div>
+              )}
+
+              {/* จัดการอุทธรณ์คะแนน */}
+              {selectedSemester && (
+                <div className="mt-6">
+                  <AppealManager semesterId={selectedSemester} />
                 </div>
               )}
 

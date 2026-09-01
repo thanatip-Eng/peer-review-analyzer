@@ -1,16 +1,27 @@
 // src/App.jsx
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, lazy, Suspense } from 'react';
 import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
 import { db } from './firebase';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import LoginPage from './components/LoginPage';
-import AdminPanel from './components/AdminPanel';
-import DataViewer from './components/DataViewer';
 import ChangePasswordModal from './components/ChangePasswordModal';
 import { LogOut, Settings, BarChart2, User, Clock, Key } from 'lucide-react';
 
+// code-split: นักศึกษาโหลดเฉพาะ StudentPortal, admin/TA โหลดเฉพาะ Admin/DataViewer
+const AdminPanel = lazy(() => import('./components/AdminPanel'));
+const DataViewer = lazy(() => import('./components/DataViewer'));
+const StudentPortal = lazy(() => import('./components/StudentPortal'));
+
+function Spinner() {
+  return (
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+      <div className="animate-spin w-12 h-12 border-4 border-cyan-500 border-t-transparent rounded-full"></div>
+    </div>
+  );
+}
+
 function AppContent() {
-  const { currentUser, userRole, userData, logout, isAdmin, isTA, isPending, isEmailAuth } = useAuth();
+  const { currentUser, userRole, userData, logout, isAdmin, isTA, isStudent, isPending, isEmailAuth } = useAuth();
   const [activeView, setActiveView] = useState('admin'); // 'data' or 'admin' — หน้าแรก = จัดการ
   const [selectedSemester, setSelectedSemester] = useState('');
   const [semesters, setSemesters] = useState([]);
@@ -21,7 +32,7 @@ function AppContent() {
   // Fetch available semesters and TA assignment
   useEffect(() => {
     async function fetchData() {
-      if (!currentUser || !userRole || userRole === 'pending') {
+      if (!currentUser || !userRole || userRole === 'pending' || userRole === 'student') {
         setLoading(false);
         return;
       }
@@ -75,6 +86,15 @@ function AppContent() {
   // Not logged in
   if (!currentUser) {
     return <LoginPage />;
+  }
+
+  // นักศึกษา (เข้าผ่าน Canvas LTI) — เห็นเฉพาะพอร์ทัลอุทธรณ์ ไม่เห็นหน้า admin/TA
+  if (isStudent) {
+    return (
+      <Suspense fallback={<Spinner />}>
+        <StudentPortal />
+      </Suspense>
+    );
   }
 
   // Pending approval
@@ -212,9 +232,10 @@ function AppContent() {
 
       {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 py-6">
+        <Suspense fallback={<div className="flex justify-center py-16"><div className="animate-spin w-10 h-10 border-4 border-cyan-500 border-t-transparent rounded-full" /></div>}>
         {/* Admin Panel */}
         {isAdmin && activeView === 'admin' && (
-          <AdminPanel 
+          <AdminPanel
             onViewData={(semId) => {
               setSelectedSemester(semId);
               setActiveView('data');
@@ -229,6 +250,7 @@ function AppContent() {
             taAssignment={currentTAAssignment}
           />
         )}
+        </Suspense>
 
         {/* No semester selected */}
         {(activeView === 'data' || isTA) && !selectedSemester && (
