@@ -311,3 +311,21 @@ export async function fetchPeerReviewData(config, courseId, assignmentId, onProg
 
   return analysis;
 }
+
+// ---- ส่งฟีดแบคผลอุทธรณ์กลับ Canvas ----
+// ดึงรายชื่อ นศ. + อีเมล เพื่อ map อีเมล (จาก MS Form) -> Canvas user id
+export async function fetchCourseUsersEmail(config, courseId, onPage) {
+  const users = await callProxy(config, 'users-email', { courseId }, onPage);
+  return (users || []).map((u) => ({
+    id: u.id,
+    sisId: (u.sis_user_id || '').toString().trim(),
+    email: (u.email || '').toString().trim().toLowerCase(),
+    loginId: (u.login_id || '').toString().trim().toLowerCase(),
+    name: u.name || u.sortable_name || '',
+  }));
+}
+
+// โพสต์คอมเมนต์ลง submission ของ นศ. (เขียนเฉพาะคอมเมนต์ ไม่แตะคะแนน)
+export async function postSubmissionComment(config, { courseId, assignmentId, userId, text }) {
+  return callProxyPage(config, { submissionComment: { courseId, assignmentId, userId, text } });
+}

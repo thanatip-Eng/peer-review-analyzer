@@ -103,6 +103,9 @@ function buildPath(resource, q) {
       return `/api/v1/courses/${courseId}/rubrics/${rubricId}?include[]=peer_assessments&style=full`;
     case 'users':
       return `/api/v1/courses/${courseId}/users?enrollment_type[]=student&per_page=100`;
+    case 'users-email':
+      // รายชื่อ นศ. + อีเมล/login (ไว้ map อีเมล MS Form -> Canvas user id สำหรับส่งฟีดแบค)
+      return `/api/v1/courses/${courseId}/users?enrollment_type[]=student&include[]=email&per_page=100`;
     default:
       return null;
   }
@@ -124,6 +127,27 @@ export default async function handler(req, res) {
     }
 
     const baseUrl = String(canvasUrl).trim().replace(/\/+$/, '');
+
+    // ----- เขียนคอมเมนต์ลง submission (ส่งฟีดแบคผลอุทธรณ์กลับ Canvas) -----
+    // เขียนเฉพาะ "คอมเมนต์" ใน assignment ที่ผู้ใช้ระบุ ไม่แตะคะแนน/rubric
+    if (body.submissionComment) {
+      const { courseId, assignmentId, userId, text } = body.submissionComment;
+      if (!courseId || !assignmentId || !userId || !text) {
+        return res.status(400).json({ error: 'submissionComment ต้องมี courseId, assignmentId, userId, text' });
+      }
+      const url = `${baseUrl}/api/v1/courses/${courseId}/assignments/${assignmentId}/submissions/${encodeURIComponent(userId)}`;
+      const resp = await fetchWithRetry(url, apiKey, {
+        method: 'PUT',
+        body: { comment: { text_comment: text } },
+        timeoutMs: 20000,
+        attempts: 2,
+      });
+      if (!resp.ok) {
+        const t = await resp.text().catch(() => '');
+        return res.status(resp.status).json({ error: `Canvas ${resp.status}: ${t.slice(0, 200)}` });
+      }
+      return res.status(200).json({ ok: true });
+    }
 
     // ----- GraphQL: ดึง submissions + peer rubric assessments แบบแบ่งหน้า (สำหรับ course ใหญ่) -----
     if (body.graphql) {
