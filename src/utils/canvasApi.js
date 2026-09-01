@@ -11,15 +11,27 @@ export const DEFAULT_CANVAS_URL = 'https://mango-cmu.instructure.com';
 
 // เรียก proxy ฝั่ง server ทีละหน้า -> คืน { data, next } (token อยู่ใน body ไม่ติดใน URL)
 async function callProxyPage(config, bodyExtra) {
-  const resp = await fetch('/api/canvas', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      apiKey: config.apiKey,
-      canvasUrl: config.canvasUrl,
-      ...bodyExtra,
-    }),
-  });
+  // client timeout กันคำขอค้าง (serverless ช้า/ค้าง) — ยกเลิกแล้วโยน error ชัด
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 35000);
+  let resp;
+  try {
+    resp = await fetch('/api/canvas', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        apiKey: config.apiKey,
+        canvasUrl: config.canvasUrl,
+        ...bodyExtra,
+      }),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.name === 'AbortError') throw new Error('หมดเวลาเชื่อมต่อ Canvas (ลองใหม่อีกครั้ง)');
+    throw e;
+  }
+  clearTimeout(timer);
 
   let payload = {};
   try {
@@ -323,6 +335,17 @@ export async function fetchCourseUsersEmail(config, courseId, onPage) {
     loginId: (u.login_id || '').toString().trim().toLowerCase(),
     name: u.name || u.sortable_name || '',
   }));
+}
+
+// ค้น นศ. รายคนด้วยอีเมล (เร็ว 1 คำขอ) -> คืน Canvas user id ที่อีเมลตรงเป๊ะ (ไม่เจอ = null)
+export async function findUserByEmail(config, courseId, email) {
+  const e = String(email || '').trim().toLowerCase();
+  if (!e) return null;
+  const payload = await callProxyPage(config, { resource: 'user-search', courseId, email: e });
+  const users = Array.isArray(payload.data) ? payload.data : [];
+  const exact = users.find((u) =>
+    (u.email || '').toLowerCase() === e || (u.login_id || '').toLowerCase() === e);
+  return exact ? exact.id : null;
 }
 
 // โพสต์คอมเมนต์ลง submission ของ นศ. (เขียนเฉพาะคอมเมนต์ ไม่แตะคะแนน)

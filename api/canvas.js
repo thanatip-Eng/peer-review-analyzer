@@ -106,6 +106,9 @@ function buildPath(resource, q) {
     case 'users-email':
       // รายชื่อ นศ. + อีเมล/login (ไว้ map อีเมล MS Form -> Canvas user id สำหรับส่งฟีดแบค)
       return `/api/v1/courses/${courseId}/users?enrollment_type[]=student&include[]=email&per_page=100`;
+    case 'user-search':
+      // ค้นผู้ใช้รายคนด้วยอีเมล/ชื่อ (เร็ว) แทนการดึงทั้งคอร์ส — สำหรับส่งฟีดแบค
+      return `/api/v1/courses/${courseId}/users?search_term=${encodeURIComponent(q.email || '')}&include[]=email&per_page=10`;
     default:
       return null;
   }

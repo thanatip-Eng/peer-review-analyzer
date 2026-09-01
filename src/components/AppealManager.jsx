@@ -9,7 +9,7 @@ import { doc, collection, onSnapshot, setDoc, getDoc, serverTimestamp } from 'fi
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { rowsFromArrayBuffer } from '../utils/qaMatcher';
-import { fetchCourseUsersEmail, postSubmissionComment } from '../utils/canvasApi';
+import { findUserByEmail, postSubmissionComment } from '../utils/canvasApi';
 import { Upload, Save, Search, MessageSquare, CheckCircle2, ChevronDown, ChevronRight, Send } from 'lucide-react';
 
 const STATUS_OPTS = [
@@ -17,6 +17,13 @@ const STATUS_OPTS = [
   { v: 'in_review', label: 'กำลังตรวจสอบ' },
   { v: 'resolved', label: 'ตรวจสอบเสร็จสิ้น' },
 ];
+
+function fmtTs(ts) {
+  try {
+    const d = ts?.toDate ? ts.toDate() : ts ? new Date(ts) : null;
+    return d ? d.toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' }) : '';
+  } catch { return ''; }
+}
 
 // parse ไฟล์ MS Form คำร้อง -> [{ sisId, email, name, text }]
 function parseAppeals(rows) {
@@ -64,9 +71,10 @@ export default function AppealManager({ semesterId, canManage = true }) {
   // ส่งฟีดแบคเข้า Canvas
   const [canvasCfg, setCanvasCfg] = useState(null); // { apiKey, canvasUrl, courseId }
   const [fbAsgId, setFbAsgId] = useState('');       // assignment id ปลายทางฟีดแบค
-  const [emailMap, setEmailMap] = useState(null);   // Map(email/login/sisId -> canvasUserId)
-  const [mapLoading, setMapLoading] = useState(false);
+  const [idCache] = useState(() => new Map()); // email -> canvasUserId (cache กันค้นซ้ำ)
   const [sendingId, setSendingId] = useState('');
+  const [sentFilter, setSentFilter] = useState('all'); // all | unsent | sent
+  const [bulk, setBulk] = useState(null); // { running, done, total, ok, fail:[{name,reason}] }
 
   // โหลด appeals (realtime) + templates + portalConfig
   useEffect(() => {
@@ -74,7 +82,7 @@ export default function AppealManager({ semesterId, canManage = true }) {
     const unsub = onSnapshot(collection(db, 'semesters', semesterId, 'appeals'), (snap) => {
       setAppeals(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     }, (e) => console.error('appeals load', e));
-    setEmailMap(null); // reset map เมื่อเปลี่ยนเทอม
+    idCache.clear(); // ล้าง cache เมื่อเปลี่ยนเทอม
     getDoc(doc(db, 'semesters', semesterId)).then((s) => {
       const d = s.exists() ? s.data() : {};
       const t = d.appealTemplates || [];
@@ -135,26 +143,6 @@ export default function AppealManager({ semesterId, canManage = true }) {
     } catch (err) { flash(`บันทึกไม่สำเร็จ: ${err.message}`); }
   };
 
-  // โหลด map อีเมล/login/รหัส -> Canvas user id (ครั้งเดียว cache ไว้)
-  const ensureEmailMap = async () => {
-    if (emailMap) return emailMap;
-    if (!canvasCfg?.apiKey || !canvasCfg?.canvasUrl || !canvasCfg?.courseId) {
-      throw new Error('ยังไม่มี Canvas token/course — ดึงข้อมูล Canvas ในหน้าจัดการก่อน');
-    }
-    setMapLoading(true);
-    try {
-      const users = await fetchCourseUsersEmail({ apiKey: canvasCfg.apiKey, canvasUrl: canvasCfg.canvasUrl }, canvasCfg.courseId);
-      const m = new Map();
-      users.forEach((u) => {
-        if (u.email) m.set(u.email, u.id);
-        if (u.loginId) m.set(u.loginId, u.id);
-        if (u.sisId) m.set(u.sisId, u.id);
-      });
-      setEmailMap(m);
-      return m;
-    } finally { setMapLoading(false); }
-  };
-
   const composeFeedback = (a) => {
     const parts = [];
     if (a.checklist && a.checklist.length) parts.push(a.checklist.map((c) => '• ' + c).join('\n'));
@@ -162,26 +150,62 @@ export default function AppealManager({ semesterId, canManage = true }) {
     return parts.join('\n\n');
   };
 
+  // หา target ของ นศ. ใน Canvas: ค้นด้วยอีเมล (เร็ว, cache) ไม่งั้น fallback sis_user_id
+  const resolveTarget = async (a) => {
+    const cfg = { apiKey: canvasCfg.apiKey, canvasUrl: canvasCfg.canvasUrl };
+    const email = (a.email || '').toLowerCase();
+    if (email) {
+      if (idCache.has(email)) { const v = idCache.get(email); if (v) return String(v); }
+      else {
+        const id = await findUserByEmail(cfg, canvasCfg.courseId, email);
+        idCache.set(email, id);
+        if (id) return String(id);
+      }
+    }
+    if (/^\d{6,10}$/.test(String(a.sisId || ''))) return `sis_user_id:${a.sisId}`;
+    return null;
+  };
+
+  // ส่ง 1 ราย -> คืน { ok, reason }
+  const sendOne = async (a) => {
+    const text = composeFeedback(a);
+    if (!text.trim()) return { ok: false, reason: 'ยังไม่มีข้อความตอบกลับ' };
+    if (!canvasCfg?.apiKey || !canvasCfg?.courseId) return { ok: false, reason: 'ยังไม่มี Canvas token/course' };
+    const target = await resolveTarget(a);
+    if (!target) return { ok: false, reason: `ไม่พบอีเมล ${a.email || a.id} ใน Canvas` };
+    await postSubmissionComment(
+      { apiKey: canvasCfg.apiKey, canvasUrl: canvasCfg.canvasUrl },
+      { courseId: canvasCfg.courseId, assignmentId: fbAsgId.trim(), userId: target, text },
+    );
+    await setDoc(doc(db, 'semesters', semesterId, 'appeals', a.id), { feedbackSentAt: serverTimestamp() }, { merge: true });
+    return { ok: true };
+  };
+
   const sendFeedback = async (a) => {
     if (!fbAsgId.trim()) { flash('ตั้ง assignment ปลายทางก่อน (ด้านบน)'); return; }
-    const text = composeFeedback(a);
-    if (!text.trim()) { flash('ยังไม่มีข้อความตอบกลับ — พิมพ์แล้วบันทึกก่อน'); return; }
     setSendingId(a.id);
     try {
-      const m = await ensureEmailMap();
-      const key = (a.email || '').toLowerCase();
-      let userId = m.get(key) || (a.sisId && m.get(String(a.sisId)));
-      // ถ้าหาไม่เจอ ลองใช้ sis_user_id ตรง (เผื่อ email ไม่ตรง แต่รหัสถูก)
-      const target = userId ? String(userId) : (/^\d{6,10}$/.test(String(a.sisId || '')) ? `sis_user_id:${a.sisId}` : null);
-      if (!target) { flash(`ไม่พบ ${a.email || a.id} ใน Canvas — ตรวจอีเมล/รหัส`); return; }
-      await postSubmissionComment(
-        { apiKey: canvasCfg.apiKey, canvasUrl: canvasCfg.canvasUrl },
-        { courseId: canvasCfg.courseId, assignmentId: fbAsgId.trim(), userId: target, text },
-      );
-      await setDoc(doc(db, 'semesters', semesterId, 'appeals', a.id), { feedbackSentAt: serverTimestamp() }, { merge: true });
-      flash(`ส่งฟีดแบคเข้า Canvas ให้ ${a.name || a.id} แล้ว`);
+      const r = await sendOne(a);
+      flash(r.ok ? `ส่งฟีดแบคให้ ${a.name || a.id} แล้ว` : `ส่งไม่สำเร็จ: ${r.reason}`);
     } catch (err) { flash(`ส่งไม่สำเร็จ: ${err.message || err}`); }
     finally { setSendingId(''); }
+  };
+
+  // ส่งเป็นชุด: เฉพาะที่ตอบแล้ว + ยังไม่ส่ง
+  const sendAll = async () => {
+    if (!fbAsgId.trim()) { flash('ตั้ง assignment ปลายทางก่อน (ด้านบน)'); return; }
+    const targets = appeals.filter((a) => a.reply && !a.feedbackSentAt);
+    if (targets.length === 0) { flash('ไม่มีคำร้องที่ตอบแล้วและยังไม่ส่ง'); return; }
+    setBulk({ running: true, done: 0, total: targets.length, ok: 0, fail: [] });
+    for (const a of targets) {
+      try {
+        const r = await sendOne(a);
+        setBulk((b) => ({ ...b, done: b.done + 1, ok: b.ok + (r.ok ? 1 : 0), fail: r.ok ? b.fail : [...b.fail, { name: a.name || a.email || a.id, reason: r.reason }] }));
+      } catch (err) {
+        setBulk((b) => ({ ...b, done: b.done + 1, fail: [...b.fail, { name: a.name || a.email || a.id, reason: err.message || String(err) }] }));
+      }
+    }
+    setBulk((b) => ({ ...b, running: false }));
   };
 
   const saveTemplates = async () => {
@@ -246,6 +270,8 @@ export default function AppealManager({ semesterId, canManage = true }) {
   };
 
   const filtered = appeals.filter((a) => {
+    if (sentFilter === 'unsent' && !(a.reply && !a.feedbackSentAt)) return false;
+    if (sentFilter === 'sent' && !a.feedbackSentAt) return false;
     if (!search.trim()) return true;
     const q = search.toLowerCase();
     return (a.id || '').includes(q) || (a.name || '').toLowerCase().includes(q) || (a.email || '').toLowerCase().includes(q);
@@ -272,6 +298,7 @@ export default function AppealManager({ semesterId, canManage = true }) {
         )}
         <span className="text-xs text-slate-500">
           รวม {appeals.length} · {statusCount.map((s) => `${s.label} ${s.n}`).join(' · ')} · รับทราบคะแนน {appeals.filter((a) => a.acknowledged).length}
+          {canManage && <> · <span className="text-green-400">ส่ง Canvas แล้ว {appeals.filter((a) => a.feedbackSentAt).length}</span> · <span className="text-amber-400">ตอบแล้วยังไม่ส่ง {appeals.filter((a) => a.reply && !a.feedbackSentAt).length}</span></>}
         </span>
       </div>
 
@@ -321,8 +348,24 @@ export default function AppealManager({ semesterId, canManage = true }) {
             className="w-48 px-3 py-2 bg-slate-900 border border-white/10 rounded-lg text-white text-sm" />
           <button onClick={saveFbAsg} className="px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm flex items-center gap-1"><Save className="w-3.5 h-3.5" /> บันทึก</button>
           {!canvasCfg?.apiKey && <span className="text-xs text-amber-400">⚠️ ยังไม่มี Canvas token (ดึงข้อมูล Canvas ในหน้าจัดการก่อน)</span>}
-          {mapLoading && <span className="text-xs text-slate-400">กำลังโหลดรายชื่อจาก Canvas...</span>}
         </div>
+        {/* ส่งเป็นชุด */}
+        <div className="flex items-center gap-3 flex-wrap pt-1">
+          <button onClick={sendAll} disabled={bulk?.running}
+            className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm flex items-center gap-1 disabled:opacity-50">
+            <Send className="w-3.5 h-3.5" /> {bulk?.running ? `กำลังส่ง ${bulk.done}/${bulk.total}...` : 'ส่งฟีดแบคที่ตอบแล้วทั้งหมด (ข้ามที่ส่งแล้ว)'}
+          </button>
+          {bulk && !bulk.running && (
+            <span className="text-xs text-slate-300">
+              เสร็จ: สำเร็จ {bulk.ok} · ล้มเหลว {bulk.fail.length}
+            </span>
+          )}
+        </div>
+        {bulk && !bulk.running && bulk.fail.length > 0 && (
+          <div className="text-xs text-red-300 bg-red-950/30 rounded p-2 max-h-32 overflow-y-auto">
+            ล้มเหลว: {bulk.fail.map((f, i) => <div key={i}>• {f.name} — {f.reason}</div>)}
+          </div>
+        )}
       </div>
 
       {/* templates */}
@@ -337,11 +380,21 @@ export default function AppealManager({ semesterId, canManage = true }) {
       </details>
       </>)}
 
-      {/* search */}
-      <div className="relative mb-3">
-        <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ค้นรหัส / ชื่อ / อีเมล"
-          className="w-full pl-9 pr-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-sm" />
+      {/* search + filter */}
+      <div className="flex gap-2 mb-3 flex-wrap">
+        <div className="relative flex-1 min-w-[180px]">
+          <Search className="w-4 h-4 text-slate-500 absolute left-3 top-1/2 -translate-y-1/2" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="ค้นรหัส / ชื่อ / อีเมล"
+            className="w-full pl-9 pr-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-sm" />
+        </div>
+        {canManage && (
+          <select value={sentFilter} onChange={(e) => setSentFilter(e.target.value)}
+            className="px-3 py-2 bg-slate-800 border border-white/10 rounded-lg text-sm">
+            <option value="all">ทั้งหมด</option>
+            <option value="unsent">ตอบแล้ว · ยังไม่ส่ง Canvas</option>
+            <option value="sent">ส่ง Canvas แล้ว</option>
+          </select>
+        )}
       </div>
 
       {/* list */}
@@ -407,7 +460,7 @@ export default function AppealManager({ semesterId, canManage = true }) {
                         <Send className="w-3.5 h-3.5" /> {sendingId === a.id ? 'กำลังส่ง...' : 'ส่งฟีดแบคเข้า Canvas'}
                       </button>
                     )}
-                    {a.feedbackSentAt && <span className="text-xs text-green-400">✓ ส่งเข้า Canvas แล้ว</span>}
+                    {a.feedbackSentAt && <span className="text-xs text-green-400" title={fmtTs(a.feedbackSentAt)}>✓ ส่งเข้า Canvas แล้ว{fmtTs(a.feedbackSentAt) ? ` · ${fmtTs(a.feedbackSentAt)}` : ''}</span>}
                     {a.updatedByName && <span className="text-xs text-slate-500">แก้ล่าสุดโดย {a.updatedByName}</span>}
                   </div>
                 </div>
