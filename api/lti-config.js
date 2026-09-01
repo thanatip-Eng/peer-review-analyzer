@@ -36,6 +36,10 @@ export default function handler(req, res) {
   <blti:launch_url>${url}</blti:launch_url>
   <blti:extensions platform="canvas.instructure.com">
     <lticm:property name="privacy_level">public</lticm:property>
+    <lticm:options name="custom_fields">
+      <lticm:property name="sis_user_id">$Canvas.user.sisSourceId</lticm:property>
+      <lticm:property name="canvas_user_id">$Canvas.user.id</lticm:property>
+    </lticm:options>
     <lticm:options name="course_navigation">
       <lticm:property name="url">${url}</lticm:property>
       <lticm:property name="text">${esc(title)}</lticm:property>

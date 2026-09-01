@@ -111,14 +111,17 @@ export default async function handler(req, res) {
     if (nonceSnap.exists) return denyPage(res, 401, 'คำขอถูกใช้ไปแล้ว (replay)');
     await nonceRef.set({ ts: Date.now() });
 
-    // 5) อ่านอีเมลที่ Canvas ยืนยัน -> รหัส นศ.
+    // 5) รหัส นศ. — ใช้ SIS ID ที่ Canvas ส่งมาตรง ๆ (custom field) ก่อน
+    // เพราะอีเมลบางโดเมน (เช่น lifelong.cmu.ac.th) เป็นชื่อ ไม่ใช่รหัส เดาจากอีเมลไม่ได้
     const email = String(params.lis_person_contact_email_primary || '').trim().toLowerCase();
-    if (!email) {
-      return denyPage(res, 403, 'Canvas ไม่ได้ส่งอีเมล — ตั้งค่า Privacy ของ External App เป็น "Public"');
-    }
-    const sisId = email.split('@')[0];
-    if (!/^\d{9,10}$/.test(sisId)) {
-      return denyPage(res, 403, `อีเมล ${email} ไม่ใช่รูปแบบอีเมลนักศึกษา (รหัส@cmu.ac.th)`);
+    const sisFromCanvas = String(params.custom_sis_user_id || params.lis_person_sourcedid || '').trim();
+    const emailPrefix = email.split('@')[0];
+    const sisId = sisFromCanvas || (/^\d{6,10}$/.test(emailPrefix) ? emailPrefix : '');
+    if (!sisId) {
+      return denyPage(
+        res, 403,
+        `ไม่พบรหัสนักศึกษาจาก Canvas${email ? ` (อีเมล ${email})` : ''}<br>ผู้ดูแลต้องตั้ง External App ให้ส่ง SIS ID (custom field sis_user_id) และ Privacy = Public แล้วลองใหม่`,
+      );
     }
 
     // 6) allowlist: การ launch ผ่าน LTI สำเร็จ = Canvas ยืนยันว่าเป็นสมาชิกคอร์สนี้แล้ว
