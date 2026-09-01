@@ -92,7 +92,7 @@ export default function AppealManager({ semesterId }) {
     // token ของ admin สำหรับเรียก Canvas
     if (currentUser?.uid) {
       getDoc(doc(db, 'canvasConfigs', currentUser.uid)).then((s) => {
-        if (s.exists()) { const d = s.data(); setCanvasCfg((prev) => ({ ...(prev || {}), apiKey: d.apiKey || '', canvasUrl: (prev && prev.canvasUrl) || d.canvasUrl || '' })); }
+        if (s.exists()) { const d = s.data(); setCanvasCfg((prev) => ({ ...(prev || {}), apiKey: d.canvasApiKey || d.apiKey || '', canvasUrl: d.canvasUrl || (prev && prev.canvasUrl) || '' })); }
       }).catch(() => {});
     }
     return unsub;
