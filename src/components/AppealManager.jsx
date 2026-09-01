@@ -56,6 +56,9 @@ export default function AppealManager({ semesterId }) {
   const [notice, setNotice] = useState('');
   const [cfg, setCfg] = useState({ appealDeadline: '', scoreAnnounceDate: '', appealsClosed: false });
   const [cfgSaving, setCfgSaving] = useState(false);
+  const [testMode, setTestMode] = useState(false);
+  const [testListText, setTestListText] = useState('');
+  const [testSaving, setTestSaving] = useState(false);
 
   // โหลด appeals (realtime) + templates + portalConfig
   useEffect(() => {
@@ -68,7 +71,12 @@ export default function AppealManager({ semesterId }) {
       setTemplates(t); setTemplateText(t.join('\n'));
     }).catch(() => {});
     getDoc(doc(db, 'semesters', semesterId, 'portalConfig', 'info')).then((s) => {
-      if (s.exists()) { const d = s.data(); setCfg({ appealDeadline: d.appealDeadline || '', scoreAnnounceDate: d.scoreAnnounceDate || '', appealsClosed: !!d.appealsClosed }); }
+      if (s.exists()) {
+        const d = s.data();
+        setCfg({ appealDeadline: d.appealDeadline || '', scoreAnnounceDate: d.scoreAnnounceDate || '', appealsClosed: !!d.appealsClosed });
+        setTestMode(!!d.testMode);
+        setTestListText((Array.isArray(d.testAllowlist) ? d.testAllowlist : []).join('\n'));
+      }
     }).catch(() => {});
     return unsub;
   }, [semesterId]);
@@ -84,6 +92,19 @@ export default function AppealManager({ semesterId }) {
       flash('บันทึกกำหนดการแล้ว');
     } catch (err) { flash(`บันทึกไม่สำเร็จ: ${err.message}`); }
     finally { setCfgSaving(false); }
+  };
+
+  const saveTest = async (nextMode) => {
+    const mode = nextMode == null ? testMode : nextMode;
+    const list = testListText.split(/[\s,]+/).map((x) => x.trim()).filter((x) => /^\d{6,10}$/.test(x));
+    setTestMode(mode); setTestSaving(true);
+    try {
+      await setDoc(doc(db, 'semesters', semesterId, 'portalConfig', 'info'), {
+        testMode: mode, testAllowlist: list, updatedAt: serverTimestamp(),
+      }, { merge: true });
+      flash(mode ? `เปิดโหมดทดสอบ (${list.length} รหัส)` : 'ปิดโหมดทดสอบ — เปิดให้ทุกคน');
+    } catch (err) { flash(`บันทึกไม่สำเร็จ: ${err.message}`); }
+    finally { setTestSaving(false); }
   };
 
   const flash = (m) => { setNotice(m); setTimeout(() => setNotice((n) => (n === m ? '' : n)), 3000); };
@@ -194,6 +215,22 @@ export default function AppealManager({ semesterId }) {
           <input type="checkbox" checked={cfg.appealsClosed} onChange={(e) => saveCfg({ appealsClosed: e.target.checked })} disabled={cfgSaving} />
           <span>ปิดรับคำร้องทันที (ไม่ต้องรอถึงกำหนด) — นศ. ยังดูคะแนน/สถานะได้</span>
         </label>
+      </div>
+
+      {/* โหมดทดสอบ */}
+      <div className="mb-4 bg-amber-950/30 border border-amber-500/20 rounded-lg p-3 space-y-2">
+        <label className="flex items-center gap-2 text-sm cursor-pointer font-medium">
+          <input type="checkbox" checked={testMode} onChange={(e) => saveTest(e.target.checked)} disabled={testSaving} />
+          <span>🧪 โหมดทดสอบ — เปิดให้เข้าเฉพาะรหัสด้านล่างเท่านั้น (คนอื่นเจอ "ยังไม่เปิดให้บริการ")</span>
+        </label>
+        <textarea value={testListText} onChange={(e) => setTestListText(e.target.value)} rows={3}
+          placeholder={'ใส่รหัสนักศึกษาที่อนุญาต (1 รหัส/บรรทัด หรือคั่นด้วยเว้นวรรค/คอมมา)\n660810437\n670510370'}
+          className="w-full px-3 py-2 bg-slate-900 border border-white/10 rounded-lg text-white text-sm font-mono" />
+        <button onClick={() => saveTest()} disabled={testSaving}
+          className="px-3 py-1.5 bg-amber-600 hover:bg-amber-500 rounded-lg text-sm flex items-center gap-1 disabled:opacity-50">
+          <Save className="w-3.5 h-3.5" /> {testSaving ? 'กำลังบันทึก...' : 'บันทึกรายชื่อทดสอบ'}
+        </button>
+        <p className="text-xs text-slate-500">พร้อมเปิดให้ทุกคน = ปิด checkbox นี้ (บันทึกอัตโนมัติ)</p>
       </div>
 
       {/* templates */}

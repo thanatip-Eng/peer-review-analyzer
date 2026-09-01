@@ -129,8 +129,21 @@ export default async function handler(req, res) {
     // ถ้ามี denylist ในอนาคตค่อยเสริม; ตอนนี้ enrollment คือด่านหลัก
     const semesterId = params.custom_semester || (await latestSemesterId(db));
     if (!semesterId) return denyPage(res, 500, 'ยังไม่มีข้อมูลเทอมในระบบ');
-    const denySnap = await db.collection('semesters').doc(semesterId).collection('appealDenylist').doc(sisId).get();
+    const semRef = db.collection('semesters').doc(semesterId);
+    const [denySnap, cfgSnap] = await Promise.all([
+      semRef.collection('appealDenylist').doc(sisId).get(),
+      semRef.collection('portalConfig').doc('info').get(),
+    ]);
     if (denySnap.exists) return denyPage(res, 403, `บัญชี ${email} ถูกระงับการเข้าถึง — ติดต่ออาจารย์`);
+
+    // โหมดทดสอบ: อนุญาตเฉพาะรหัสใน testAllowlist
+    const cfg = cfgSnap.exists ? cfgSnap.data() : {};
+    if (cfg.testMode) {
+      const allow = Array.isArray(cfg.testAllowlist) ? cfg.testAllowlist.map((x) => String(x).trim()) : [];
+      if (!allow.includes(String(sisId))) {
+        return denyPage(res, 403, 'ระบบอยู่ระหว่างทดสอบ ยังไม่เปิดให้บริการ — กรุณารอประกาศจากอาจารย์');
+      }
+    }
 
     // 7) mint custom token (uid = รหัส นศ., claim role=student)
     const token = await adminAuth().createCustomToken(sisId, {
