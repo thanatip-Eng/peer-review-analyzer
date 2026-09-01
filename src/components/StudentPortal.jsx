@@ -35,7 +35,7 @@ export default function StudentPortal() {
 
   const [appeal, setAppeal] = useState(undefined); // undefined=loading, null=ไม่มี
   const [scores, setScores] = useState(undefined);
-  const [cfg, setCfg] = useState({ appealDeadline: '', scoreAnnounceDate: '', appealsClosed: false });
+  const [cfg, setCfg] = useState(null); // null=loading
   const [error, setError] = useState('');
   const [category, setCategory] = useState('');
   const [detail, setDetail] = useState('');
@@ -50,7 +50,10 @@ export default function StudentPortal() {
     getDoc(doc(db, 'semesters', semesterId, 'studentScores', sisId))
       .then((s) => setScores(s.exists() ? s.data() : null)).catch(() => setScores(null));
     getDoc(doc(db, 'semesters', semesterId, 'portalConfig', 'info'))
-      .then((s) => { if (s.exists()) { const d = s.data(); setCfg({ appealDeadline: d.appealDeadline || '', scoreAnnounceDate: d.scoreAnnounceDate || '', appealsClosed: !!d.appealsClosed }); } }).catch(() => {});
+      .then((s) => {
+        const d = s.exists() ? s.data() : {};
+        setCfg({ appealDeadline: d.appealDeadline || '', scoreAnnounceDate: d.scoreAnnounceDate || '', appealsClosed: !!d.appealsClosed, testMode: !!d.testMode, testAllowlist: Array.isArray(d.testAllowlist) ? d.testAllowlist.map(String) : [] });
+      }).catch(() => setCfg({}));
     return unsub;
   }, [sisId, semesterId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -59,8 +62,9 @@ export default function StudentPortal() {
   };
 
   const hasSubmitted = !!(appeal?.submissions && appeal.submissions.length > 0);
-  const deadlinePassed = cfg.appealDeadline && todayStr() > cfg.appealDeadline;
-  const closed = cfg.appealsClosed || deadlinePassed;
+  const deadlinePassed = cfg?.appealDeadline && todayStr() > cfg.appealDeadline;
+  const closed = cfg?.appealsClosed || deadlinePassed;
+  const testBlocked = cfg?.testMode && !(cfg.testAllowlist || []).includes(String(sisId));
   const st = STATUS[appeal?.status] || STATUS.received;
   const StatusIcon = st.icon;
 
@@ -112,13 +116,20 @@ export default function StudentPortal() {
       </header>
 
       <main className="max-w-3xl mx-auto px-4 py-6 space-y-4">
-        {(appeal === undefined || scores === undefined) && (
+        {(appeal === undefined || scores === undefined || cfg === null) && (
           <div className="flex justify-center py-16"><div className="animate-spin w-10 h-10 border-4 border-cyan-500 border-t-transparent rounded-full" /></div>
         )}
 
         {error && <div className="bg-red-900/40 border border-red-500/30 rounded-xl p-4 text-red-200">{error}</div>}
 
-        {appeal !== undefined && scores !== undefined && (
+        {cfg !== null && testBlocked && (
+          <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-8 text-center">
+            <h2 className="text-lg font-semibold mb-2">🧪 ระบบอยู่ระหว่างทดสอบ</h2>
+            <p className="text-slate-400 text-sm">ยังไม่เปิดให้บริการ — กรุณารอประกาศจากอาจารย์</p>
+          </div>
+        )}
+
+        {appeal !== undefined && scores !== undefined && cfg !== null && !testBlocked && (
           <>
             {/* กำหนดการ */}
             {(cfg.appealDeadline || cfg.scoreAnnounceDate) && (
