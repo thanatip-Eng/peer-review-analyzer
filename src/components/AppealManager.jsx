@@ -54,10 +54,12 @@ export default function AppealManager({ semesterId }) {
   const [drafts, setDrafts] = useState({}); // sisId -> { reply, checklist:Set, status }
   const [importing, setImporting] = useState(false);
   const [notice, setNotice] = useState('');
+  const [cfg, setCfg] = useState({ appealDeadline: '', scoreAnnounceDate: '', appealsClosed: false });
+  const [cfgSaving, setCfgSaving] = useState(false);
 
-  // โหลด appeals (realtime) + templates
+  // โหลด appeals (realtime) + templates + portalConfig
   useEffect(() => {
-    if (!semesterId) { setAppeals([]); setTemplates([]); setTemplateText(''); return; }
+    if (!semesterId) { setAppeals([]); setTemplates([]); setTemplateText(''); setCfg({ appealDeadline: '', scoreAnnounceDate: '', appealsClosed: false }); return; }
     const unsub = onSnapshot(collection(db, 'semesters', semesterId, 'appeals'), (snap) => {
       setAppeals(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
     }, (e) => console.error('appeals load', e));
@@ -65,8 +67,24 @@ export default function AppealManager({ semesterId }) {
       const t = (s.exists() && s.data().appealTemplates) || [];
       setTemplates(t); setTemplateText(t.join('\n'));
     }).catch(() => {});
+    getDoc(doc(db, 'semesters', semesterId, 'portalConfig', 'info')).then((s) => {
+      if (s.exists()) { const d = s.data(); setCfg({ appealDeadline: d.appealDeadline || '', scoreAnnounceDate: d.scoreAnnounceDate || '', appealsClosed: !!d.appealsClosed }); }
+    }).catch(() => {});
     return unsub;
   }, [semesterId]);
+
+  const saveCfg = async (patch) => {
+    const next = { ...cfg, ...patch };
+    setCfg(next); setCfgSaving(true);
+    try {
+      await setDoc(doc(db, 'semesters', semesterId, 'portalConfig', 'info'), {
+        appealDeadline: next.appealDeadline || '', scoreAnnounceDate: next.scoreAnnounceDate || '',
+        appealsClosed: !!next.appealsClosed, updatedAt: serverTimestamp(),
+      }, { merge: true });
+      flash('บันทึกกำหนดการแล้ว');
+    } catch (err) { flash(`บันทึกไม่สำเร็จ: ${err.message}`); }
+    finally { setCfgSaving(false); }
+  };
 
   const flash = (m) => { setNotice(m); setTimeout(() => setNotice((n) => (n === m ? '' : n)), 3000); };
 
@@ -155,8 +173,27 @@ export default function AppealManager({ semesterId }) {
           <input type="file" accept=".xlsx,.xls" multiple className="hidden" onChange={handleImport} disabled={importing} />
         </label>
         <span className="ml-3 text-xs text-slate-500">
-          รวม {appeals.length} คำร้อง · {statusCount.map((s) => `${s.label} ${s.n}`).join(' · ')}
+          รวม {appeals.length} · {statusCount.map((s) => `${s.label} ${s.n}`).join(' · ')} · รับทราบคะแนน {appeals.filter((a) => a.acknowledged).length}
         </span>
+      </div>
+
+      {/* กำหนดการ + เปิด/ปิดรับคำร้อง */}
+      <div className="mb-4 bg-slate-800/40 rounded-lg p-3 space-y-2">
+        <div className="text-sm text-slate-300 font-medium">กำหนดการ (นักศึกษาเห็นในพอร์ทัล)</div>
+        <div className="flex flex-wrap gap-4">
+          <label className="text-xs text-slate-400">ยื่นขอตรวจสอบได้ถึง
+            <input type="date" value={cfg.appealDeadline} onChange={(e) => saveCfg({ appealDeadline: e.target.value })}
+              className="block mt-1 px-3 py-2 bg-slate-900 border border-white/10 rounded-lg text-white text-sm" />
+          </label>
+          <label className="text-xs text-slate-400">ประกาศคะแนนจริง (ลง Canvas)
+            <input type="date" value={cfg.scoreAnnounceDate} onChange={(e) => saveCfg({ scoreAnnounceDate: e.target.value })}
+              className="block mt-1 px-3 py-2 bg-slate-900 border border-white/10 rounded-lg text-white text-sm" />
+          </label>
+        </div>
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
+          <input type="checkbox" checked={cfg.appealsClosed} onChange={(e) => saveCfg({ appealsClosed: e.target.checked })} disabled={cfgSaving} />
+          <span>ปิดรับคำร้องทันที (ไม่ต้องรอถึงกำหนด) — นศ. ยังดูคะแนน/สถานะได้</span>
+        </label>
       </div>
 
       {/* templates */}
@@ -191,6 +228,8 @@ export default function AppealManager({ semesterId }) {
                   {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                   <span className="font-mono text-cyan-400">{a.id}</span>
                   <span className="text-slate-300">{a.name || a.email || ''}</span>
+                  {a.acknowledged && <span className="text-xs text-green-400" title="นักศึกษากดรับทราบคะแนนแล้ว">✓ รับทราบ</span>}
+                  {(!a.submissions || a.submissions.length === 0) && a.acknowledged && <span className="text-xs text-slate-500">(ไม่ได้ยื่นอุทธรณ์)</span>}
                 </span>
                 <span className={`text-xs px-2 py-0.5 rounded-full ${a.status === 'resolved' ? 'bg-green-900/40 text-green-300' : a.status === 'in_review' ? 'bg-amber-900/40 text-amber-300' : 'bg-blue-900/40 text-blue-300'}`}>{stLabel}</span>
               </button>

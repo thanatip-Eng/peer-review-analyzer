@@ -1,6 +1,6 @@
 // src/components/DataViewer.jsx
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { doc, getDoc, setDoc, collection, getDocs, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, collection, getDocs, onSnapshot, serverTimestamp, writeBatch } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { getFlaggedStudents, getFlaggedGraders } from '../utils/csvParser';
@@ -46,6 +46,7 @@ export default function DataViewer({ semesterId, taAssignment }) {
   const [clipOverrides, setClipOverrides] = useState({}); // studentId -> { taScore, ... } คะแนนคลิปที่ TA ให้
   const [clipModal, setClipModal] = useState(null);       // { student } เปิดให้ TA ใส่คะแนนคลิป
   const [canvasExportOpen, setCanvasExportOpen] = useState(false); // modal ส่งออก Canvas
+  const [publishState, setPublishState] = useState(''); // '' | 'publishing' | 'done' | error msg
   
   // UI state
   const [activeTab, setActiveTab] = useState('overview');
@@ -442,6 +443,35 @@ export default function DataViewer({ semesterId, taAssignment }) {
       })
       .sort((a, b) => a.sisId.localeCompare(b.sisId));
   }, [data, studentsById, clipFinal, qaByOwner, graderQaTotal, isAdmin, isTA, taAssignment, allowedGroups, getStudentGroup]);
+
+  // เผยแพร่คะแนนสรุปให้ นศ. เห็นในพอร์ทัล (precompute -> studentScores/{sisId})
+  const publishScores = useCallback(async () => {
+    if (!semesterId || exportPeople.length === 0) return;
+    setPublishState('publishing');
+    try {
+      const CH = 400;
+      for (let i = 0; i < exportPeople.length; i += CH) {
+        const batch = writeBatch(db);
+        exportPeople.slice(i, i + CH).forEach(p => {
+          const clip = p.clip === '' ? null : Number(p.clip);
+          const ownerQa = p.ownerQa === '' ? null : Number(p.ownerQa);
+          const peer = p.peer === '' ? null : Number(p.peer);
+          const total = (clip || 0) + (ownerQa || 0) + (peer || 0);
+          batch.set(doc(db, 'semesters', semesterId, 'studentScores', p.sisId), {
+            sisId: p.sisId, name: p.name || '',
+            clip, clipMax: workMax, ownerQa, ownerQaMax: 2, peer, peerMax: 3, total,
+            publishedAt: serverTimestamp(),
+          }, { merge: true });
+        });
+        await batch.commit();
+      }
+      setPublishState('done');
+      setTimeout(() => setPublishState((s) => (s === 'done' ? '' : s)), 4000);
+    } catch (e) {
+      console.error('publish scores', e);
+      setPublishState('error: ' + (e.message || e));
+    }
+  }, [semesterId, exportPeople, workMax]);
 
   // Filter students by search and group
   const filteredStudents = useMemo(() => {
@@ -882,6 +912,25 @@ export default function DataViewer({ semesterId, taAssignment }) {
               <Download className="w-5 h-5" /> ส่งออกเข้า Canvas (CSV)
             </button>
           </div>
+
+          {/* เผยแพร่คะแนนให้ นศ. เห็นในพอร์ทัล */}
+          {isAdmin && (
+            <div className="bg-slate-900/50 border border-white/10 rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h3 className="font-semibold flex items-center gap-2"><Eye className="w-5 h-5 text-cyan-400" /> เผยแพร่คะแนนให้นักศึกษา (พอร์ทัล)</h3>
+                <p className="text-sm text-slate-400 mt-1">คำนวณคะแนน 3 ส่วนล่าสุดแล้วเขียนให้ นศ. เห็นในพอร์ทัล ({exportPeople.length} คน) · กดซ้ำได้เมื่อคะแนนเปลี่ยน</p>
+                {publishState === 'done' && <p className="text-sm text-green-400 mt-1">✓ เผยแพร่คะแนนแล้ว</p>}
+                {publishState.startsWith('error') && <p className="text-sm text-red-400 mt-1">{publishState}</p>}
+              </div>
+              <button
+                onClick={publishScores}
+                disabled={publishState === 'publishing'}
+                className="px-4 py-2.5 bg-cyan-600 hover:bg-cyan-500 rounded-xl font-medium flex items-center gap-2 disabled:opacity-50"
+              >
+                <Eye className="w-5 h-5" /> {publishState === 'publishing' ? 'กำลังเผยแพร่...' : 'เผยแพร่คะแนน'}
+              </button>
+            </div>
+          )}
 
           {/* Group Stats */}
           {groupStats && Object.keys(groupStats).length > 0 && (

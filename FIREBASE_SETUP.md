@@ -186,14 +186,30 @@ service cloud.firestore {
       match /appeals/{sisId} {
         allow read: if isLoggedIn() && (request.auth.uid == sisId || isAdmin() || isTA());
         allow write: if isAdmin() || isTA();
-        // นักศึกษายื่นคำร้องของตัวเองได้ (สร้าง doc ใหม่สถานะ received)
+        // นักศึกษาสร้าง doc ของตัวเองได้ (คำร้อง status received และ/หรือ กดรับทราบคะแนน)
+        // จำกัดคำร้องได้สูงสุด 1 รายการ (submissions.size() <= 1) ห้ามแตะ reply/checklist
         allow create: if isLoggedIn() && request.auth.uid == sisId
           && request.resource.data.sisId == sisId
-          && request.resource.data.status == 'received'
-          && request.resource.data.keys().hasOnly(['sisId','email','name','submissions','status','createdAt','updatedAt']);
-        // แก้ได้เฉพาะ submissions (ห้ามแตะ reply/status/checklist ของเจ้าหน้าที่)
+          && request.resource.data.keys().hasOnly(['sisId','email','name','submissions','status','acknowledged','acknowledgedAt','createdAt','updatedAt'])
+          && (!('submissions' in request.resource.data) || request.resource.data.submissions.size() <= 1)
+          && (!('status' in request.resource.data) || request.resource.data.status == 'received')
+          && !('reply' in request.resource.data) && !('checklist' in request.resource.data);
+        // แก้ได้เฉพาะ submissions (สูงสุด 1) + acknowledged — ห้ามแตะ reply/status/checklist
         allow update: if isLoggedIn() && request.auth.uid == sisId
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['submissions','updatedAt']);
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['submissions','acknowledged','acknowledgedAt','updatedAt'])
+          && (!('submissions' in request.resource.data) || request.resource.data.submissions.size() <= 1);
+      }
+
+      // คะแนนสรุปที่เผยแพร่ให้ นศ. เห็นในพอร์ทัล (key = รหัส นศ.) — precompute โดย admin
+      match /studentScores/{sisId} {
+        allow read: if isLoggedIn() && (request.auth.uid == sisId || isAdmin() || isTA());
+        allow write: if isAdmin();
+      }
+
+      // ตั้งค่าพอร์ทัล (กำหนดการ + เปิด/ปิดรับคำร้อง) — นศ. ที่ login อ่านได้
+      match /portalConfig/{docId} {
+        allow read: if isLoggedIn();
+        allow write: if isAdmin();
       }
 
       // Sub-collection: appealAllowlist (รายชื่ออีเมล/รหัสที่อนุญาตพิเศษ — จัดการฝั่ง server/console)
