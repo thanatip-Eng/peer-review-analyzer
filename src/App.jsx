@@ -11,6 +11,7 @@ import { LogOut, Settings, BarChart2, User, Clock, Key } from 'lucide-react';
 const AdminPanel = lazy(() => import('./components/AdminPanel'));
 const DataViewer = lazy(() => import('./components/DataViewer'));
 const StudentPortal = lazy(() => import('./components/StudentPortal'));
+const AppealManager = lazy(() => import('./components/AppealManager'));
 
 function Spinner() {
   return (
@@ -168,6 +169,26 @@ function AppContent() {
                 </select>
               )}
 
+              {/* View toggle for TA: ดูข้อมูล / อุทธรณ์ */}
+              {isTA && (
+                <div className="flex bg-slate-800 rounded-lg p-1">
+                  <button
+                    onClick={() => setActiveView('data')}
+                    className={`px-4 py-2 rounded-md text-sm transition ${activeView !== 'appeal' ? 'bg-cyan-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                  >
+                    <BarChart2 className="w-4 h-4 inline mr-2" />
+                    ดูข้อมูล
+                  </button>
+                  <button
+                    onClick={() => setActiveView('appeal')}
+                    className={`px-4 py-2 rounded-md text-sm transition ${activeView === 'appeal' ? 'bg-amber-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                  >
+                    <Settings className="w-4 h-4 inline mr-2" />
+                    อุทธรณ์
+                  </button>
+                </div>
+              )}
+
               {/* View toggle for Admin */}
               {isAdmin && (
                 <div className="flex bg-slate-800 rounded-lg p-1">
@@ -244,11 +265,16 @@ function AppContent() {
         )}
 
         {/* Data Viewer */}
-        {(activeView === 'data' || isTA) && selectedSemester && (
+        {(activeView === 'data' || (isTA && activeView !== 'appeal')) && selectedSemester && (
           <DataViewer
             semesterId={selectedSemester}
             taAssignment={currentTAAssignment}
           />
+        )}
+
+        {/* Appeal manager for TA (ตอบ/ตั้งสถานะ — ไม่ส่ง Canvas) */}
+        {isTA && activeView === 'appeal' && selectedSemester && (
+          <AppealManager semesterId={selectedSemester} canManage={false} />
         )}
         </Suspense>
 

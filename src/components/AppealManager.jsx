@@ -46,7 +46,7 @@ function parseAppeals(rows) {
   return out;
 }
 
-export default function AppealManager({ semesterId }) {
+export default function AppealManager({ semesterId, canManage = true }) {
   const { currentUser, userData } = useAuth();
   const [appeals, setAppeals] = useState([]);
   const [templates, setTemplates] = useState([]);
@@ -262,17 +262,21 @@ export default function AppealManager({ semesterId }) {
 
       {notice && <div className="mb-3 text-sm px-3 py-2 rounded-lg bg-cyan-900/40 text-cyan-200">{notice}</div>}
 
-      {/* import */}
-      <div className="mb-4">
-        <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded-lg text-sm font-medium disabled:opacity-50">
-          <Upload className="w-4 h-4" /> {importing ? 'กำลังนำเข้า...' : 'อัปโหลดคำร้อง MS Form (.xlsx)'}
-          <input type="file" accept=".xlsx,.xls" multiple className="hidden" onChange={handleImport} disabled={importing} />
-        </label>
-        <span className="ml-3 text-xs text-slate-500">
+      {/* import (admin เท่านั้น) + สรุปจำนวน */}
+      <div className="mb-4 flex items-center flex-wrap gap-3">
+        {canManage && (
+          <label className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-500 rounded-lg text-sm font-medium disabled:opacity-50">
+            <Upload className="w-4 h-4" /> {importing ? 'กำลังนำเข้า...' : 'อัปโหลดคำร้อง MS Form (.xlsx)'}
+            <input type="file" accept=".xlsx,.xls" multiple className="hidden" onChange={handleImport} disabled={importing} />
+          </label>
+        )}
+        <span className="text-xs text-slate-500">
           รวม {appeals.length} · {statusCount.map((s) => `${s.label} ${s.n}`).join(' · ')} · รับทราบคะแนน {appeals.filter((a) => a.acknowledged).length}
         </span>
       </div>
 
+      {/* ส่วนตั้งค่า/จัดการ — admin เท่านั้น */}
+      {canManage && (<>
       {/* กำหนดการ + เปิด/ปิดรับคำร้อง */}
       <div className="mb-4 bg-slate-800/40 rounded-lg p-3 space-y-2">
         <div className="text-sm text-slate-300 font-medium">กำหนดการ (นักศึกษาเห็นในพอร์ทัล)</div>
@@ -331,6 +335,7 @@ export default function AppealManager({ semesterId }) {
         />
         <button onClick={saveTemplates} className="mt-2 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm flex items-center gap-1"><Save className="w-3.5 h-3.5" /> บันทึกเทมเพลต</button>
       </details>
+      </>)}
 
       {/* search */}
       <div className="relative mb-3">
@@ -395,11 +400,13 @@ export default function AppealManager({ semesterId }) {
                       {STATUS_OPTS.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}
                     </select>
                     <button onClick={() => saveReply(a)} className="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded-lg text-sm flex items-center gap-1"><Save className="w-3.5 h-3.5" /> บันทึก</button>
-                    <button onClick={() => sendFeedback(a)} disabled={sendingId === a.id || !a.reply}
-                      title={!a.reply ? 'พิมพ์ข้อความตอบกลับแล้วบันทึกก่อน' : 'โพสต์ข้อความเป็นคอมเมนต์ใน Canvas'}
-                      className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm flex items-center gap-1 disabled:opacity-50">
-                      <Send className="w-3.5 h-3.5" /> {sendingId === a.id ? 'กำลังส่ง...' : 'ส่งฟีดแบคเข้า Canvas'}
-                    </button>
+                    {canManage && (
+                      <button onClick={() => sendFeedback(a)} disabled={sendingId === a.id || !a.reply}
+                        title={!a.reply ? 'พิมพ์ข้อความตอบกลับแล้วบันทึกก่อน' : 'โพสต์ข้อความเป็นคอมเมนต์ใน Canvas'}
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm flex items-center gap-1 disabled:opacity-50">
+                        <Send className="w-3.5 h-3.5" /> {sendingId === a.id ? 'กำลังส่ง...' : 'ส่งฟีดแบคเข้า Canvas'}
+                      </button>
+                    )}
                     {a.feedbackSentAt && <span className="text-xs text-green-400">✓ ส่งเข้า Canvas แล้ว</span>}
                     {a.updatedByName && <span className="text-xs text-slate-500">แก้ล่าสุดโดย {a.updatedByName}</span>}
                   </div>
