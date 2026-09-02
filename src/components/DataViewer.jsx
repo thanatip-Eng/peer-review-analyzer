@@ -341,14 +341,8 @@ export default function DataViewer({ semesterId, taAssignment }) {
     const taScore = clipOverrides[student.studentId]?.taScore;
     const hasTa = taScore != null && !isNaN(taScore);
     const autoEligible = n >= 3 && range <= SPREAD_LIMIT && !overMax;
-    // คะแนน TA ชนะ auto เสมอ (ถ้า TA กรอกคะแนนแล้ว ใช้ของ TA)
+    // คะแนน TA ชนะ auto เสมอ (ถ้า TA กรอกคะแนนแล้ว ใช้ของ TA ตรงตามที่กรอก รองรับทศนิยม 0.5 ไม่ว่ารีวิวกี่คน)
     if (hasTa) {
-      if (n === 2) {
-        const combined = [...grades, Number(taScore)];
-        const cRange = Math.max(...combined) - Math.min(...combined);
-        return { status: 'ta', final: cRange <= SPREAD_LIMIT ? Math.max(...combined) : Number(taScore), needsTA: true, hasTa: true, overMax };
-      }
-      // 1 รีวิว หรือ 3+ (รวมกระจาย/เกินเต็ม) → ใช้คะแนน TA
       return { status: 'ta', final: Number(taScore), needsTA: true, hasTa: true, overMax };
     }
     // ยังไม่มีคะแนน TA
