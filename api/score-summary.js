@@ -118,9 +118,17 @@ export default async function handler(req, res) {
       return { label: `${lo}–${hi}`, lo, hi, count: 0 };
     });
 
-    const totals = { students: 0, scored: 0, pending: 0, auto: 0, ta: 0, overMax: 0 };
-    const pendingReasons = { 'ไม่มีผู้รีวิว': 0 };
-    const pending = [];
+    const round05 = (x) => Math.round(x * 2) / 2; // ปัดเป็นทศนิยม 0.5 ตามรูบริค
+    const bandIdx = (score) => {
+      let idx = Math.floor(score / bandWidth);
+      if (idx >= bandCount) idx = bandCount - 1; // score == workMax ตกช่วงบนสุด
+      if (idx < 0) idx = 0;
+      return idx;
+    };
+
+    const totals = { students: 0, scored: 0, avgFilled: 0, critical: 0, auto: 0, ta: 0, overMax: 0 };
+    const critical = [];  // ไม่มีใครรีวิว + TA ยังไม่ให้คะแนน — ต้องให้คะแนนเอง (สำคัญสุด)
+    const avgFilled = []; // มีรีวิวแต่ TA ยังไม่ตรวจ — เติมค่าเฉลี่ยชั่วคราว
 
     Object.values(students).forEach((st) => {
       totals.students++;
@@ -128,40 +136,48 @@ export default async function handler(req, res) {
       if (cf.overMax) totals.overMax++;
 
       if (cf.status === 'pending') {
-        totals.pending++;
-        pendingReasons[cf.reason] = (pendingReasons[cf.reason] || 0) + 1;
-        pending.push({
+        // เคสวิกฤต: ไม่มีผู้รีวิวเลย → ไม่มีค่าเฉลี่ยให้เติม ต้องให้คะแนนเอง
+        if (cf.n === 0) {
+          totals.critical++;
+          critical.push({ studentId: st.studentId, name: st.fullName || st.studentName || '' });
+          return;
+        }
+        // มีผู้รีวิว แต่ TA ยังไม่ตรวจ → เติม "ค่าเฉลี่ยคะแนนผู้รีวิว" เป็นคะแนนชั่วคราว
+        let avg = round05(cf.grades.reduce((a, b) => a + b, 0) / cf.n);
+        if (avg > workMax) avg = workMax;
+        if (avg < 0) avg = 0;
+        totals.avgFilled++;
+        avgFilled.push({
           studentId: st.studentId,
           name: st.fullName || st.studentName || '',
           grades: cf.grades,
           graderCount: cf.n,
-          range: cf.range,
+          avg,
           reason: cf.reason,
         });
+        distribution[bandIdx(avg)].count++; // นับค่าเฉลี่ยชั่วคราวเข้า band ด้วย
         return;
       }
 
-      // มีคะแนนสิ้นสุด -> นับเข้า band + สถานะ
+      // มีคะแนนสิ้นสุดแล้ว (TA หรือ auto) -> นับเข้า band + สถานะ
       totals.scored++;
       if (cf.status === 'auto') totals.auto++;
       if (cf.status === 'ta') totals.ta++;
-      const score = cf.final;
-      let idx = Math.floor(score / bandWidth);
-      if (idx >= bandCount) idx = bandCount - 1; // score == workMax ตกช่วงบนสุด
-      if (idx < 0) idx = 0;
-      distribution[idx].count++;
+      distribution[bandIdx(cf.final)].count++;
     });
 
-    // เรียง pending: ที่น่ากังวลก่อน (overMax > กระจาย > ไม่ครบ 3 > ไม่มีรีวิว) แล้วตามรหัส
-    const reasonRank = (r) => (r.startsWith('มีผู้รีวิวให้เกิน') ? 0 : r.startsWith('คะแนนกระจาย') ? 1 : r.startsWith('รีวิวไม่ครบ') ? 2 : 3);
-    pending.sort((a, b) => reasonRank(a.reason) - reasonRank(b.reason) || String(a.studentId).localeCompare(String(b.studentId)));
+    // เรียงเคสวิกฤตตามรหัส
+    critical.sort((a, b) => String(a.studentId).localeCompare(String(b.studentId)));
+    // เรียง avg-filled: ที่น่ากังวลก่อน (overMax > กระจาย > ไม่ครบ 3) แล้วตามรหัส
+    const reasonRank = (r) => (r.startsWith('มีผู้รีวิวให้เกิน') ? 0 : r.startsWith('คะแนนกระจาย') ? 1 : 2);
+    avgFilled.sort((a, b) => reasonRank(a.reason) - reasonRank(b.reason) || String(a.studentId).localeCompare(String(b.studentId)));
 
     const payload = {
       semester: { id: semesterId, name: sem.name || semesterId, workMax, bandWidth },
       totals,
       distribution,
-      pendingReasons,
-      pending,
+      critical,
+      avgFilled,
       generatedAt: new Date().toISOString(),
     };
 
@@ -203,6 +219,9 @@ const PAGE_HEAD = `<!doctype html><html lang="th"><head><meta charset="utf-8">
   .card .l { font-size:12px; color:#64748b; }
   .card.warn { background:#fff7ed; border-color:#fed7aa; }
   .card.warn .n { color:#c2410c; }
+  .card.crit { background:#fef2f2; border-color:#fecaca; }
+  .card.crit .n { color:#b91c1c; }
+  .crit-note { background:#fef2f2; border:1px solid #fecaca; color:#991b1b; padding:10px 14px; border-radius:12px; font-size:13px; margin-bottom:10px; }
   h2 { font-size:15px; margin: 26px 0 10px; }
   table { width:100%; border-collapse:collapse; background:#fff; border:1px solid #e2e8f0; border-radius:12px; overflow:hidden; }
   th,td { padding:9px 12px; text-align:left; font-size:13px; border-bottom:1px solid #eef2f7; }
@@ -245,6 +264,20 @@ function pillFor(reason) {
 }
 
 function renderReport(p) {
+  const gen = new Date(p.generatedAt);
+  const genStr = gen.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', dateStyle: 'medium', timeStyle: 'short' });
+
+  // ----- อันดับแรกสุด: เคสวิกฤต (ไม่มีใครรีวิว + TA ยังไม่ให้คะแนน) -----
+  const critRows = p.critical.map((s) => `<tr>
+      <td>${esc(s.studentId)}</td><td>${esc(s.name)}</td></tr>`).join('');
+  const criticalBlock = `
+    <h2 style="color:#b91c1c">🔴 ต้องจัดการก่อนอันดับแรก — ไม่มีใครรีวิว และ TA ยังไม่ให้คะแนน (${p.totals.critical} คน)</h2>
+    ${p.critical.length === 0
+      ? '<div class="empty">✓ ไม่มีเคสแบบนี้ — ทุกคนมีอย่างน้อยหนึ่งรีวิวหรือคะแนน TA แล้ว</div>'
+      : `<div class="crit-note">นักศึกษากลุ่มนี้ <b>ไม่มีคะแนนและไม่มีค่าเฉลี่ยให้เติม</b> ต้องให้ TA/อาจารย์ใส่คะแนนเองก่อนเผยแพร่</div>
+        <table><thead><tr><th>รหัส</th><th>ชื่อ</th></tr></thead><tbody>${critRows}</tbody></table>`}`;
+
+  // ----- การกระจาย (รวมค่าเฉลี่ยชั่วคราว) -----
   const maxBand = Math.max(1, ...p.distribution.map((b) => b.count));
   const distRows = p.distribution.map((b) => {
     const pct = Math.round((b.count / maxBand) * 100);
@@ -252,45 +285,48 @@ function renderReport(p) {
       <td class="num">${b.count}</td>
       <td><div class="bar"><i style="width:${pct}%"></i></div></td></tr>`;
   }).join('');
+  const inBands = p.totals.scored + p.totals.avgFilled;
 
-  const pendRows = p.pending.map((s) => {
+  // ----- มีรีวิวแต่ TA ยังไม่ตรวจ → เติมค่าเฉลี่ยชั่วคราว -----
+  const avgRows = p.avgFilled.map((s) => {
     const grades = (s.grades || []).join(', ');
     return `<tr>
       <td>${esc(s.studentId)}</td>
       <td>${esc(s.name)}</td>
-      <td>${pillFor(s.reason)}</td>
+      <td class="num"><b>${esc(s.avg)}</b></td>
       <td>${esc(grades) || '—'}</td>
       <td class="num">${s.graderCount}</td>
+      <td>${pillFor(s.reason)}</td>
     </tr>`;
   }).join('');
-
-  const gen = new Date(p.generatedAt);
-  const genStr = gen.toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', dateStyle: 'medium', timeStyle: 'short' });
 
   return `${PAGE_HEAD}
     <h1>สรุปคะแนนรูบริค (คลิป) — ${esc(p.semester.name)}</h1>
     <div class="sub">คะแนนเต็ม ${esc(p.semester.workMax)} · ความกว้างช่วง ${esc(p.semester.bandWidth)} คะแนน · ข้อมูล ณ ${esc(genStr)} น. (สด — สะท้อนที่ TA แก้ล่าสุด)</div>
 
+    ${criticalBlock}
+
     <div class="cards">
       <div class="card"><div class="n">${p.totals.students}</div><div class="l">นักศึกษาทั้งหมด</div></div>
-      <div class="card"><div class="n">${p.totals.scored}</div><div class="l">มีคะแนนแล้ว</div></div>
-      <div class="card warn"><div class="n">${p.totals.pending}</div><div class="l">รอตรวจ (ยังไม่มีคะแนน TA)</div></div>
+      <div class="card"><div class="n">${p.totals.scored}</div><div class="l">มีคะแนนสิ้นสุด (TA/auto)</div></div>
+      <div class="card warn"><div class="n">${p.totals.avgFilled}</div><div class="l">เติมค่าเฉลี่ยชั่วคราว (TA ยังไม่ตรวจ)</div></div>
+      <div class="card crit"><div class="n">${p.totals.critical}</div><div class="l">ไม่มีรีวิว — ต้องให้คะแนนเอง</div></div>
       <div class="card"><div class="n">${p.totals.ta}</div><div class="l">TA ให้คะแนนเอง</div></div>
-      <div class="card"><div class="n">${p.totals.auto}</div><div class="l">อัตโนมัติ (Max)</div></div>
     </div>
 
-    <h2>การกระจายคะแนน (เฉพาะที่มีคะแนนแล้ว ${p.totals.scored} คน)</h2>
+    <h2>การกระจายคะแนน (${inBands} คนที่มีคะแนน — รวมค่าเฉลี่ยชั่วคราว ${p.totals.avgFilled} คน)</h2>
     <table><thead><tr><th>ช่วงคะแนน</th><th class="num">จำนวน</th><th></th></tr></thead>
       <tbody>${distRows}</tbody></table>
 
-    <h2>ควรตรวจสอบก่อนเผยแพร่ (${p.totals.pending} คน)</h2>
-    ${p.pending.length === 0
-      ? '<div class="empty">✓ ไม่มีนักศึกษาที่รอตรวจ — ทุกคนมีคะแนนสิ้นสุดแล้ว พร้อมเผยแพร่</div>'
-      : `<table><thead><tr><th>รหัส</th><th>ชื่อ</th><th>เหตุผล</th><th>คะแนนผู้รีวิว</th><th class="num">จำนวนรีวิว</th></tr></thead>
-        <tbody>${pendRows}</tbody></table>`}
+    <h2>เติมค่าเฉลี่ยชั่วคราว — มีรีวิวแต่ TA ยังไม่ตรวจ (${p.totals.avgFilled} คน)</h2>
+    ${p.avgFilled.length === 0
+      ? '<div class="empty">✓ ไม่มีเคสค้างที่ต้องเติมค่าเฉลี่ย</div>'
+      : `<div class="sub">ค่าเฉลี่ย = ค่าเฉลี่ยคะแนนผู้รีวิว (ปัด 0.5, ไม่เกินคะแนนเต็ม) เป็นคะแนนชั่วคราวจนกว่า TA จะตรวจ</div>
+        <table><thead><tr><th>รหัส</th><th>ชื่อ</th><th class="num">ค่าเฉลี่ย</th><th>คะแนนผู้รีวิว</th><th class="num">จำนวนรีวิว</th><th>เหตุผลที่ยังไม่สิ้นสุด</th></tr></thead>
+        <tbody>${avgRows}</tbody></table>`}
 
     <div class="foot">
-      รายงานอ่านอย่างเดียว · คำนวณคะแนนสิ้นสุดด้วยตรรกะเดียวกับหน้าจัดการ (clipFinal) ·
+      รายงานอ่านอย่างเดียว · คำนวณด้วยตรรกะเดียวกับหน้าจัดการ (clipFinal); ค่าเฉลี่ยเป็นเพียงค่าชั่วคราวในรายงานนี้ ·
       สั่งพิมพ์เป็น PDF ได้จากเมนูพิมพ์ของเบราว์เซอร์
     </div>
     ${PAGE_FOOT}`;
