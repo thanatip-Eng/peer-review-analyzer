@@ -10,13 +10,19 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { rowsFromArrayBuffer } from '../utils/qaMatcher';
 import { findUserByEmail, postSubmissionComment } from '../utils/canvasApi';
-import { Upload, Save, Search, MessageSquare, CheckCircle2, ChevronDown, ChevronRight, Send } from 'lucide-react';
+import { Upload, Save, Search, MessageSquare, CheckCircle2, ChevronDown, ChevronRight, Send, Copy } from 'lucide-react';
 
 const STATUS_OPTS = [
   { v: 'received', label: 'รับเรื่องแล้ว' },
   { v: 'in_review', label: 'กำลังตรวจสอบ' },
   { v: 'resolved', label: 'ตรวจสอบเสร็จสิ้น' },
 ];
+
+// คอลัมน์ในไฟล์ MS Form อ้างอิงด้วยตัวอักษร (A=0) — H=7, I=8, K=10
+const COL_H = 7;
+const COL_I = 8;
+const COL_K = 10;
+const colLetter = (i) => String.fromCharCode(65 + i);
 
 function fmtTs(ts) {
   try {
@@ -25,12 +31,17 @@ function fmtTs(ts) {
   } catch { return ''; }
 }
 
-// parse ไฟล์ MS Form คำร้อง -> [{ sisId, email, name, text }]
+// parse ไฟล์ MS Form คำร้อง -> [{ sisId, email, name, typedId, text, answers }]
+// answers = คำตอบรายคอลัมน์ (เก็บ index เดิมของคอลัมน์ไว้ เพื่อจัดสีตามตัวอักษรคอลัมน์ H/I/K)
 function parseAppeals(rows) {
   if (!rows || !rows.length) return [];
   const hdr = (rows[0] || []).map((h) => String(h || ''));
   const emailIdx = hdr.findIndex((h) => /email/i.test(h));
   const nameIdx = hdr.findIndex((h) => /name|ชื่อ/i.test(h));
+  const typedIdIdx = hdr.findIndex((h) => /รหัสนักศึกษา|รหัส นักศึกษา|9\s*หลัก|student\s*id/i.test(h));
+  const isMeta = (i, h) =>
+    i === emailIdx || i === nameIdx ||
+    /^(id|start time|completion time|last modified|เวลาเริ่ม|เวลาที่ทำ)/i.test(h);
   const out = [];
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
@@ -41,14 +52,17 @@ function parseAppeals(rows) {
     // การส่งฟีดแบคเข้า Canvas match ด้วย "อีเมลเต็ม" อยู่แล้ว จึงไม่บังคับรูปแบบรหัส
     const sisId = email.split('@')[0];
     const name = String((nameIdx >= 0 ? row[nameIdx] : '') || '').trim();
-    const parts = [];
+    const typedId = typedIdIdx >= 0 ? String(row[typedIdIdx] == null ? '' : row[typedIdIdx]).trim() : '';
+    const answers = [];   // [{ i, v }] คงลำดับ/ดัชนีคอลัมน์เดิม
+    const parts = [];     // ข้อความรวม (fallback + ใช้ประกอบฟีดแบค) — คงรูปแบบเดิม
     hdr.forEach((h, i) => {
-      if (i === emailIdx || i === nameIdx) return;
-      if (/^(id|start time|completion time|last modified|เวลาเริ่ม|เวลาที่ทำ)/i.test(h)) return;
+      if (isMeta(i, h)) return;
       const v = String(row[i] == null ? '' : row[i]).trim();
-      if (v) parts.push(`${h}: ${v}`);
+      if (!v) return;
+      answers.push({ i, v });
+      parts.push(`${h}: ${v}`);
     });
-    out.push({ sisId, email, name, text: parts.join('\n') });
+    out.push({ sisId, email, name, typedId, text: parts.join('\n'), answers });
   }
   return out;
 }
@@ -224,14 +238,15 @@ export default function AppealManager({ semesterId, canManage = true }) {
       // group ตาม sisId -> submissions[]
       const byId = {};
       for (const a of rowsAll) {
-        if (!byId[a.sisId]) byId[a.sisId] = { sisId: a.sisId, email: a.email, name: a.name, submissions: [] };
-        byId[a.sisId].submissions.push({ text: a.text });
+        if (!byId[a.sisId]) byId[a.sisId] = { sisId: a.sisId, email: a.email, name: a.name, typedId: a.typedId || '', submissions: [] };
+        byId[a.sisId].submissions.push({ text: a.text, answers: a.answers || [] });
         if (a.name && !byId[a.sisId].name) byId[a.sisId].name = a.name;
+        if (a.typedId && !byId[a.sisId].typedId) byId[a.sisId].typedId = a.typedId;
       }
       const entries = Object.values(byId);
       for (const en of entries) {
         await setDoc(doc(db, 'semesters', semesterId, 'appeals', en.sisId), {
-          sisId: en.sisId, email: en.email, name: en.name, submissions: en.submissions,
+          sisId: en.sisId, email: en.email, name: en.name, typedId: en.typedId || '', submissions: en.submissions,
           importedAt: serverTimestamp(), importedBy: currentUser?.uid || '',
         }, { merge: true });
       }
@@ -274,7 +289,7 @@ export default function AppealManager({ semesterId, canManage = true }) {
     if (sentFilter === 'sent' && !a.feedbackSentAt) return false;
     if (!search.trim()) return true;
     const q = search.toLowerCase();
-    return (a.id || '').includes(q) || (a.name || '').toLowerCase().includes(q) || (a.email || '').toLowerCase().includes(q);
+    return (a.id || '').includes(q) || (a.typedId || '').includes(q) || (a.name || '').toLowerCase().includes(q) || (a.email || '').toLowerCase().includes(q);
   });
 
   const statusCount = STATUS_OPTS.map((s) => ({ ...s, n: appeals.filter((a) => (a.status || 'received') === s.v).length }));
@@ -404,12 +419,17 @@ export default function AppealManager({ semesterId, canManage = true }) {
           const open = expanded === a.id;
           const d = draftFor(a);
           const stLabel = STATUS_OPTS.find((s) => s.v === (a.status || 'received'))?.label;
+          const idForCopy = a.typedId || a.id;
           return (
             <div key={a.id} className="bg-slate-800/40 rounded-lg border border-white/5">
               <button onClick={() => setExpanded(open ? null : a.id)} className="w-full flex items-center justify-between px-3 py-2 text-left">
                 <span className="flex items-center gap-2 text-sm">
                   {open ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                  <span className="font-mono text-cyan-400">{a.id}</span>
+                  <span
+                    onClick={(e) => { e.stopPropagation(); navigator.clipboard?.writeText(idForCopy); flash(`คัดลอกรหัส ${idForCopy}`); }}
+                    title="คลิกเพื่อคัดลอกรหัสไปค้นหา"
+                    className="font-mono text-base font-bold text-cyan-300 bg-cyan-500/10 px-2 py-0.5 rounded inline-flex items-center gap-1 cursor-pointer hover:bg-cyan-500/20 select-all"
+                  >{idForCopy}<Copy className="w-3 h-3 opacity-60" /></span>
                   <span className="text-slate-300">{a.name || a.email || ''}</span>
                   {a.acknowledged && <span className="text-xs text-green-400" title="นักศึกษากดรับทราบคะแนนแล้ว">✓ รับทราบ</span>}
                   {(!a.submissions || a.submissions.length === 0) && a.acknowledged && <span className="text-xs text-slate-500">(ไม่ได้ยื่นอุทธรณ์)</span>}
@@ -425,7 +445,20 @@ export default function AppealManager({ semesterId, canManage = true }) {
                         {s.category && <span className="px-1.5 py-0.5 rounded bg-slate-700 text-slate-300">{s.category}</span>}
                         <span>{s.source === 'portal' ? 'ยื่นในพอร์ทัล' : 'MS Form'}</span>
                       </div>
-                      <div className="whitespace-pre-wrap">{s.text || '—'}</div>
+                      {s.answers && s.answers.length > 0 ? (
+                        // แสดง "คำตอบ" อย่างเดียว (ไม่โชว์คำถาม) · ซ่อนคอลัมน์ I
+                        // H: เขียวถ้า "คะแนนถูกต้องแล้ว" ไม่งั้นสีร้อน · K: ตัวเข้มอ่านง่าย (สิ่งที่ นศ. ตอบ)
+                        <div className="space-y-1">
+                          {s.answers.filter((ans) => ans.i !== COL_I).map((ans) => {
+                            let cls = 'text-slate-300';
+                            if (ans.i === COL_H) cls = /คะแนนถูกต้องแล้ว/.test(ans.v) ? 'text-emerald-400 font-medium' : 'text-rose-400 font-medium';
+                            else if (ans.i === COL_K) cls = 'text-slate-50 font-semibold';
+                            return <div key={ans.i} className={`whitespace-pre-wrap ${cls}`}>{ans.v}</div>;
+                          })}
+                        </div>
+                      ) : (
+                        <div className="whitespace-pre-wrap">{s.text || '—'}</div>
+                      )}
                     </div>
                   ))}
                   {/* checklist */}
