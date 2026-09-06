@@ -152,6 +152,35 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true });
     }
 
+    // ----- ส่งข้อความเข้า Inbox (Conversations) ถึง นศ. รายคน -----
+    // สร้างบทสนทนาใหม่ในคอร์ส (force_new) ไม่แตะคะแนน/งานอื่น
+    if (body.conversation) {
+      const { courseId, recipientId, subject, text } = body.conversation;
+      if (!recipientId || !text) {
+        return res.status(400).json({ error: 'conversation ต้องมี recipientId, text' });
+      }
+      const payload = {
+        recipients: [String(recipientId)],
+        body: text,
+        force_new: true,
+        mode: 'sync',
+      };
+      if (subject) payload.subject = subject;
+      if (courseId) payload.context_code = `course_${courseId}`;
+      const url = `${baseUrl}/api/v1/conversations`;
+      const resp = await fetchWithRetry(url, apiKey, {
+        method: 'POST',
+        body: payload,
+        timeoutMs: 20000,
+        attempts: 2,
+      });
+      if (!resp.ok) {
+        const t = await resp.text().catch(() => '');
+        return res.status(resp.status).json({ error: `Canvas ${resp.status}: ${t.slice(0, 200)}` });
+      }
+      return res.status(200).json({ ok: true });
+    }
+
     // ----- GraphQL: ดึง submissions + peer rubric assessments แบบแบ่งหน้า (สำหรับ course ใหญ่) -----
     if (body.graphql) {
       const resp = await fetchWithRetry(`${baseUrl}/api/graphql`, apiKey, {

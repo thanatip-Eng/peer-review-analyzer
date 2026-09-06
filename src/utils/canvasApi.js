@@ -352,3 +352,8 @@ export async function findUserByEmail(config, courseId, email) {
 export async function postSubmissionComment(config, { courseId, assignmentId, userId, text }) {
   return callProxyPage(config, { submissionComment: { courseId, assignmentId, userId, text } });
 }
+
+// ส่งข้อความเข้า Inbox (Conversations) ถึง นศ. รายคน
+export async function postConversation(config, { courseId, recipientId, subject, text }) {
+  return callProxyPage(config, { conversation: { courseId, recipientId, subject, text } });
+}

@@ -9,7 +9,7 @@ import { doc, collection, onSnapshot, setDoc, getDoc, serverTimestamp } from 'fi
 import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { rowsFromArrayBuffer } from '../utils/qaMatcher';
-import { findUserByEmail, postSubmissionComment } from '../utils/canvasApi';
+import { findUserByEmail, postSubmissionComment, postConversation } from '../utils/canvasApi';
 import { Upload, Save, Search, MessageSquare, CheckCircle2, ChevronDown, ChevronRight, Send, Copy } from 'lucide-react';
 
 const STATUS_OPTS = [
@@ -17,6 +17,9 @@ const STATUS_OPTS = [
   { v: 'in_review', label: 'กำลังตรวจสอบ' },
   { v: 'resolved', label: 'ตรวจสอบเสร็จสิ้น' },
 ];
+
+// หัวข้อข้อความ Inbox (Conversations) ที่ส่งถึง นศ.
+const INBOX_SUBJECT = 'ผลการตรวจสอบคำร้องขอตรวจสอบคะแนน';
 
 // คอลัมน์ในไฟล์ MS Form อ้างอิงด้วยตัวอักษร (A=0) — H=7, I=8, K=10
 const COL_H = 7;
@@ -87,6 +90,7 @@ export default function AppealManager({ semesterId, canManage = true }) {
   const [fbAsgId, setFbAsgId] = useState('');       // assignment id ปลายทางฟีดแบค
   const [idCache] = useState(() => new Map()); // email -> canvasUserId (cache กันค้นซ้ำ)
   const [sendingId, setSendingId] = useState('');
+  const [sendingInboxId, setSendingInboxId] = useState('');
   const [sentFilter, setSentFilter] = useState('all'); // all | unsent | sent
   const [bulk, setBulk] = useState(null); // { running, done, total, ok, fail:[{name,reason}] }
 
@@ -203,6 +207,27 @@ export default function AppealManager({ semesterId, canManage = true }) {
       flash(r.ok ? `ส่งฟีดแบคให้ ${a.name || a.id} แล้ว` : `ส่งไม่สำเร็จ: ${r.reason}`);
     } catch (err) { flash(`ส่งไม่สำเร็จ: ${err.message || err}`); }
     finally { setSendingId(''); }
+  };
+
+  // ส่งข้อความตอบกลับเข้า Inbox (Conversations) ถึง นศ. รายคน — ใช้ข้อความ reply ที่ TA พิมพ์
+  // Inbox ส่งแล้วยกเลิก/แก้ไม่ได้ จึงยืนยันก่อน
+  const sendInbox = async (a) => {
+    const text = (a.reply || '').trim();
+    if (!text) { flash('ยังไม่มีข้อความตอบกลับ (พิมพ์แล้วบันทึกก่อน)'); return; }
+    if (!canvasCfg?.apiKey || !canvasCfg?.courseId) { flash('ยังไม่มี Canvas token/course'); return; }
+    if (!window.confirm(`ส่งข้อความนี้เข้า Inbox ของ ${a.name || a.id}?\n(ส่งแล้วยกเลิก/แก้ไม่ได้)\n\n${text}`)) return;
+    setSendingInboxId(a.id);
+    try {
+      const target = await resolveTarget(a);
+      if (!target) { flash(`ไม่พบอีเมล ${a.email || a.id} ใน Canvas`); return; }
+      await postConversation(
+        { apiKey: canvasCfg.apiKey, canvasUrl: canvasCfg.canvasUrl },
+        { courseId: canvasCfg.courseId, recipientId: target, subject: INBOX_SUBJECT, text },
+      );
+      await setDoc(doc(db, 'semesters', semesterId, 'appeals', a.id), { inboxSentAt: serverTimestamp() }, { merge: true });
+      flash(`ส่ง Inbox ให้ ${a.name || a.id} แล้ว`);
+    } catch (err) { flash(`ส่ง Inbox ไม่สำเร็จ: ${err.message || err}`); }
+    finally { setSendingInboxId(''); }
   };
 
   // ส่งเป็นชุด: เฉพาะที่ตอบแล้ว + ยังไม่ส่ง
@@ -493,7 +518,15 @@ export default function AppealManager({ semesterId, canManage = true }) {
                         <Send className="w-3.5 h-3.5" /> {sendingId === a.id ? 'กำลังส่ง...' : 'ส่งฟีดแบคเข้า Canvas'}
                       </button>
                     )}
+                    {canManage && (
+                      <button onClick={() => sendInbox(a)} disabled={sendingInboxId === a.id || !a.reply}
+                        title={!a.reply ? 'พิมพ์ข้อความตอบกลับแล้วบันทึกก่อน' : 'ส่งข้อความตอบกลับเข้า Inbox ของนักศึกษาใน Canvas'}
+                        className="px-3 py-1.5 bg-sky-700 hover:bg-sky-600 rounded-lg text-sm flex items-center gap-1 disabled:opacity-50">
+                        <MessageSquare className="w-3.5 h-3.5" /> {sendingInboxId === a.id ? 'กำลังส่ง...' : 'ส่งเข้า Inbox'}
+                      </button>
+                    )}
                     {a.feedbackSentAt && <span className="text-xs text-green-400" title={fmtTs(a.feedbackSentAt)}>✓ ส่งเข้า Canvas แล้ว{fmtTs(a.feedbackSentAt) ? ` · ${fmtTs(a.feedbackSentAt)}` : ''}</span>}
+                    {a.inboxSentAt && <span className="text-xs text-sky-300" title={fmtTs(a.inboxSentAt)}>✓ ส่ง Inbox แล้ว{fmtTs(a.inboxSentAt) ? ` · ${fmtTs(a.inboxSentAt)}` : ''}</span>}
                     {a.updatedByName && <span className="text-xs text-slate-500">แก้ล่าสุดโดย {a.updatedByName}</span>}
                   </div>
                 </div>
