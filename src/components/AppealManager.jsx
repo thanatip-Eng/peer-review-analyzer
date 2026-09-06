@@ -10,7 +10,7 @@ import { db } from '../firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { rowsFromArrayBuffer } from '../utils/qaMatcher';
 import { findUserByEmail, postSubmissionComment } from '../utils/canvasApi';
-import { Upload, Save, Search, MessageSquare, CheckCircle2, ChevronDown, ChevronRight, Send, Copy } from 'lucide-react';
+import { Upload, Save, Search, MessageSquare, CheckCircle2, ChevronDown, ChevronRight, Send, Copy, FileText, ExternalLink } from 'lucide-react';
 
 const STATUS_OPTS = [
   { v: 'received', label: 'รับเรื่องแล้ว' },
@@ -88,6 +88,7 @@ export default function AppealManager({ semesterId, canManage = true }) {
   const [idCache] = useState(() => new Map()); // email -> canvasUserId (cache กันค้นซ้ำ)
   const [sendingId, setSendingId] = useState('');
   const [sendingInboxId, setSendingInboxId] = useState('');
+  const [openingId, setOpeningId] = useState('');
   const [sentFilter, setSentFilter] = useState('all'); // all | unsent | sent
   const [bulk, setBulk] = useState(null); // { running, done, total, ok, fail:[{name,reason}] }
 
@@ -102,7 +103,7 @@ export default function AppealManager({ semesterId, canManage = true }) {
       const d = s.exists() ? s.data() : {};
       const t = d.appealTemplates || [];
       setTemplates(t); setTemplateText(t.join('\n'));
-      setCanvasCfg((prev) => ({ ...(prev || {}), canvasUrl: d.canvasUrl || (prev && prev.canvasUrl) || '', courseId: d.canvasCourseId || '' }));
+      setCanvasCfg((prev) => ({ ...(prev || {}), canvasUrl: d.canvasUrl || (prev && prev.canvasUrl) || '', courseId: d.canvasCourseId || '', assignmentId: d.canvasAssignmentId || '', reviewFormUrl: d.qaReviewerSheetUrl || '' }));
     }).catch(() => {});
     getDoc(doc(db, 'semesters', semesterId, 'portalConfig', 'info')).then((s) => {
       if (s.exists()) {
@@ -225,6 +226,32 @@ export default function AppealManager({ semesterId, canManage = true }) {
       window.open(`${base}/conversations?${params.toString()}`, '_blank', 'noopener');
       flash(`เปิด Canvas Inbox — ผู้รับ: ${a.name || a.email || a.id}${hasNumericId ? '' : ' (เลือกผู้รับเองใน Canvas)'}`);
     } finally { setSendingInboxId(''); }
+  };
+
+  // เปิดงานที่ นศ. ส่งใน Canvas (หน้าตรวจงาน SpeedGrader) — ปุ่มเดียวกับที่ใช้ตอนให้คะแนน
+  // เปิดได้ทั้ง admin/TA (อ้างอิงอ่านอย่างเดียว) · ถ้าหา id นศ. ไม่ได้ เปิดหน้าตรวจงานให้เลือก นศ. เอง
+  const openSubmission = async (a) => {
+    if (!canvasCfg?.canvasUrl || !canvasCfg?.courseId || !canvasCfg?.assignmentId) {
+      flash('ยังไม่ได้ตั้งค่า Canvas course/assignment (ดึงข้อมูล Canvas ในหน้าจัดการก่อน)'); return;
+    }
+    setOpeningId(a.id);
+    try {
+      let userId = null;
+      if (canvasCfg.apiKey) { try { userId = await resolveTarget(a); } catch { /* หาไม่เจอ -> เปิดแบบเลือกเอง */ } }
+      const hasNumericId = userId && /^\d+$/.test(String(userId)); // SpeedGrader student_id ต้องเป็นตัวเลข
+      const base = String(canvasCfg.canvasUrl).replace(/\/+$/, '');
+      let url = `${base}/courses/${canvasCfg.courseId}/gradebook/speed_grader?assignment_id=${encodeURIComponent(canvasCfg.assignmentId)}`;
+      if (hasNumericId) url += `&student_id=${userId}`;
+      window.open(url, '_blank', 'noopener');
+      if (!hasNumericId) flash('เปิดหน้าตรวจงาน (เลือก นศ. เองใน SpeedGrader)');
+    } finally { setOpeningId(''); }
+  };
+
+  // เปิด MS Form งานรีวิว (ลิงก์เดียวกันทุกคน) — ตั้งค่าที่ semester: qaReviewerSheetUrl
+  const openReviewForm = () => {
+    const url = (canvasCfg?.reviewFormUrl || '').trim();
+    if (!url) { flash('ยังไม่ได้ตั้งลิงก์ MS Form งานรีวิว (ตั้งในหน้าจัดการ)'); return; }
+    window.open(url, '_blank', 'noopener');
   };
 
   // ส่งเป็นชุด: เฉพาะที่ตอบแล้ว + ยังไม่ส่ง
@@ -508,6 +535,18 @@ export default function AppealManager({ semesterId, canManage = true }) {
                       {STATUS_OPTS.map((s) => <option key={s.v} value={s.v}>{s.label}</option>)}
                     </select>
                     <button onClick={() => saveReply(a)} className="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded-lg text-sm flex items-center gap-1"><Save className="w-3.5 h-3.5" /> บันทึก</button>
+                    <button onClick={() => openSubmission(a)} disabled={openingId === a.id}
+                      title="เปิดงานที่นักศึกษาส่งใน Canvas (หน้าตรวจงาน SpeedGrader)"
+                      className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm flex items-center gap-1 disabled:opacity-50">
+                      <FileText className="w-3.5 h-3.5" /> {openingId === a.id ? 'กำลังเปิด...' : 'เปิดงานที่ส่ง'}
+                    </button>
+                    {canvasCfg?.reviewFormUrl && (
+                      <button onClick={openReviewForm}
+                        title="เปิด MS Form งานรีวิว"
+                        className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm flex items-center gap-1">
+                        <ExternalLink className="w-3.5 h-3.5" /> เปิด MS Form รีวิว
+                      </button>
+                    )}
                     {canManage && (
                       <button onClick={() => sendFeedback(a)} disabled={sendingId === a.id || !a.reply}
                         title={!a.reply ? 'พิมพ์ข้อความตอบกลับแล้วบันทึกก่อน' : 'โพสต์ข้อความเป็นคอมเมนต์ใน Canvas'}
