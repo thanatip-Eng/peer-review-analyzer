@@ -547,6 +547,7 @@ export default function AppealManager({ semesterId, canManage = true }) {
                         <ExternalLink className="w-3.5 h-3.5" /> เปิด MS Form รีวิว
                       </button>
                     )}
+                    {/* ซ่อนปุ่ม "ส่งฟีดแบคเข้า Canvas" (แบบคอมเมนต์) ตามที่ผู้ใช้ขอ — ใช้ปุ่ม "เปิด Inbox" แทน
                     {canManage && (
                       <button onClick={() => sendFeedback(a)} disabled={sendingId === a.id || !a.reply}
                         title={!a.reply ? 'พิมพ์ข้อความตอบกลับแล้วบันทึกก่อน' : 'โพสต์ข้อความเป็นคอมเมนต์ใน Canvas'}
@@ -554,6 +555,7 @@ export default function AppealManager({ semesterId, canManage = true }) {
                         <Send className="w-3.5 h-3.5" /> {sendingId === a.id ? 'กำลังส่ง...' : 'ส่งฟีดแบคเข้า Canvas'}
                       </button>
                     )}
+                    */}
                     {canManage && (
                       <button onClick={() => openInbox(a)} disabled={sendingInboxId === a.id}
                         title="เปิดหน้าเขียนข้อความใน Canvas Inbox โดยเลือกนักศึกษาไว้ให้ (พิมพ์และกดส่งเองใน Canvas)"
